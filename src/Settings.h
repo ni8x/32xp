@@ -40,10 +40,24 @@ public:
     String getHeartColor();
     void setHeartColor(const String& hex);
 
+    String getLyricColor();
+    void setLyricColor(const String& hex);
+
+    bool getLyricGlow();
+    void setLyricGlow(bool enabled);
+
+    bool getLyricRainbow();
+    void setLyricRainbow(bool enabled);
+
+    // Full-screen lyrics style: hide prev/next lines and center the current line
+    bool getLyricFull();
+    void setLyricFull(bool enabled);
+
     // Default values
     static constexpr const char* DEFAULT_LATITUDE = "28.61";
     static constexpr const char* DEFAULT_LONGITUDE = "77.20";
     static constexpr const char* DEFAULT_HEART_COLOR = "#00d2ff";
+    static constexpr const char* DEFAULT_LYRIC_COLOR = "#00ffff"; // cyan
 
     void clearAll();
     
@@ -56,6 +70,10 @@ private:
     String _latitude;
     String _longitude;
     String _heartColor;
+    String _lyricColor;
+    bool _lyricGlow;
+    bool _lyricRainbow;
+    bool _lyricFull;
     uint8_t _displayMode;
     uint8_t _rotation;
     uint32_t _slideshowInterval;

@@ -68,6 +68,27 @@ const char index_html[] PROGMEM = R"rawliteral(
       <div class="row"><span>Progress:</span> <span class="value" id="lyricProgress">-</span></div>
       <input type="text" id="manualLyric" placeholder="Manual display test text">
       <button onclick="sendManualLyric()">Show Test Text</button>
+      <br><br>
+      <label>Lyric Text Color</label>
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+        <input type="color" id="lyricColor" value="#00ffff" style="height:40px; padding:2px; flex:1; min-width:50px;">
+        <input type="text" id="lyricColorHex" value="#00ffff" maxlength="7" placeholder="#RRGGBB" style="flex:2; margin-bottom:0;">
+        <button onclick="saveLyricColor()">Save</button>
+      </div>
+      <p style="color: #888; font-size: 0.85em; margin:0 0 10px;">Pick a swatch or type any custom hex code, e.g. #ff44aa.</p>
+      <label style="margin-top:8px; display:block;">Lyrics Style</label>
+      <div style="display:flex; gap:24px; margin-bottom:4px;">
+        <label style="display:flex; align-items:center; gap:6px; font-weight:normal;">
+          <input type="checkbox" id="lyricGlow" onchange="postLyricEffects()"> Glow
+        </label>
+        <label style="display:flex; align-items:center; gap:6px; font-weight:normal;">
+          <input type="checkbox" id="lyricRainbow" onchange="postLyricEffects()"> Rainbow
+        </label>
+        <label style="display:flex; align-items:center; gap:6px; font-weight:normal;">
+          <input type="checkbox" id="lyricFull" onchange="postLyricEffects()"> Full Screen (hide prev/next)
+        </label>
+      </div>
+      <p style="color: #888; font-size: 0.85em; margin:0 0 10px;">Effects apply to the current lyric line and can be used together.</p>
       <p style="color: #888; font-size: 0.85em;">Tap TEST in the Android app to verify connection, then START to sync lyrics.</p>
     </div>
 
@@ -166,6 +187,21 @@ const char index_html[] PROGMEM = R"rawliteral(
         if (document.activeElement !== document.getElementById('heartColor') && data.heartColor !== undefined) {
           document.getElementById('heartColor').value = data.heartColor;
         }
+        var colorTyping = (document.activeElement === document.getElementById('lyricColor') ||
+                           document.activeElement === document.getElementById('lyricColorHex'));
+        if (!colorTyping && data.lyricColor !== undefined) {
+          document.getElementById('lyricColor').value = data.lyricColor;
+          document.getElementById('lyricColorHex').value = data.lyricColor;
+        }
+        if (document.activeElement !== document.getElementById('lyricGlow') && data.lyricGlow !== undefined) {
+          document.getElementById('lyricGlow').checked = !!data.lyricGlow;
+        }
+        if (document.activeElement !== document.getElementById('lyricRainbow') && data.lyricRainbow !== undefined) {
+          document.getElementById('lyricRainbow').checked = !!data.lyricRainbow;
+        }
+        if (document.activeElement !== document.getElementById('lyricFull') && data.lyricFull !== undefined) {
+          document.getElementById('lyricFull').checked = !!data.lyricFull;
+        }
         if (document.activeElement !== document.getElementById('lat') && data.lat !== undefined) {
           document.getElementById('lat').value = data.lat;
         }
@@ -220,6 +256,24 @@ const char index_html[] PROGMEM = R"rawliteral(
       if (confirm('Delete ' + name + '?')) {
         postData('/api/deletefile', 'filename=' + encodeURIComponent(name));
       }
+    }
+
+    function saveLyricColor() {
+      var hex = document.getElementById('lyricColorHex').value.trim();
+      if (!/^#[0-9a-fA-F]{6}$/.test(hex)) { alert('Enter a color as #RRGGBB'); return; }
+      postData('/api/lyriccolor', 'color=' + encodeURIComponent(hex));
+    }
+
+    // Keep the hex text field in sync with the native color swatch.
+    document.getElementById('lyricColor').addEventListener('input', function() {
+      document.getElementById('lyricColorHex').value = this.value;
+    });
+
+    function postLyricEffects() {
+      var glow = document.getElementById('lyricGlow').checked ? 1 : 0;
+      var rainbow = document.getElementById('lyricRainbow').checked ? 1 : 0;
+      var full = document.getElementById('lyricFull').checked ? 1 : 0;
+      postData('/api/lyriceffect', 'glow=' + glow + '&rainbow=' + rainbow + '&full=' + full);
     }
 
     function sendManualLyric() {
@@ -277,6 +331,10 @@ String WebServer::buildStatusJson() {
     doc["ip"] = _wifiManager.ipAddress();
     doc["clockText"] = _settings.getClockText();
     doc["heartColor"] = _settings.getHeartColor();
+    doc["lyricColor"] = _settings.getLyricColor();
+    doc["lyricGlow"] = _settings.getLyricGlow();
+    doc["lyricRainbow"] = _settings.getLyricRainbow();
+    doc["lyricFull"] = _settings.getLyricFull();
     doc["lat"] = _settings.getLatitude();
     doc["lon"] = _settings.getLongitude();
     doc["displayMode"] = _settings.getDisplayMode();
@@ -344,6 +402,32 @@ void WebServer::setupRoutes() {
             _settings.setHeartColor(request->getParam("color", true)->value());
             LOG_INFO(TAG, "Settings saved: Heart color");
         }
+        request->send(200, "text/plain", "OK");
+    });
+
+    _server.on("/api/lyriccolor", HTTP_POST, [this](AsyncWebServerRequest *request){
+        if (request->hasParam("color", true)) {
+            _settings.setLyricColor(request->getParam("color", true)->value());
+            LOG_INFO(TAG, "Settings saved: Lyric color");
+        }
+        request->send(200, "text/plain", "OK");
+    });
+
+    _server.on("/api/lyriceffect", HTTP_POST, [this](AsyncWebServerRequest *request){
+        bool changed = false;
+        if (request->hasParam("glow", true)) {
+            _settings.setLyricGlow(request->getParam("glow", true)->value() == "1");
+            changed = true;
+        }
+        if (request->hasParam("rainbow", true)) {
+            _settings.setLyricRainbow(request->getParam("rainbow", true)->value() == "1");
+            changed = true;
+        }
+        if (request->hasParam("full", true)) {
+            _settings.setLyricFull(request->getParam("full", true)->value() == "1");
+            changed = true;
+        }
+        if (changed) LOG_INFO(TAG, "Settings saved: Lyric effects");
         request->send(200, "text/plain", "OK");
     });
 

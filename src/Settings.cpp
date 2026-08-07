@@ -12,6 +12,10 @@ Settings::Settings()
       _latitude(DEFAULT_LATITUDE),
       _longitude(DEFAULT_LONGITUDE),
       _heartColor(DEFAULT_HEART_COLOR),
+      _lyricColor(DEFAULT_LYRIC_COLOR),
+      _lyricGlow(false),
+      _lyricRainbow(false),
+      _lyricFull(false),
       _displayMode(0),
       _rotation(Config::DEFAULT_ROTATION),
       _slideshowInterval(5),
@@ -40,6 +44,10 @@ void Settings::init() {
     _latitude = _preferences.getString("lat", DEFAULT_LATITUDE);
     _longitude = _preferences.getString("lon", DEFAULT_LONGITUDE);
     _heartColor = _preferences.getString("heartColor", DEFAULT_HEART_COLOR);
+    _lyricColor = _preferences.getString("lyricColor", DEFAULT_LYRIC_COLOR);
+    _lyricGlow = _preferences.getBool("lyricGlow", false);
+    _lyricRainbow = _preferences.getBool("lyricRainbow", false);
+    _lyricFull = _preferences.getBool("lyricFull", false);
     _displayMode = _preferences.getUChar("mode", 0);
     _rotation = _preferences.getUChar("rotation", Config::DEFAULT_ROTATION);
     if (_rotation > 3) _rotation = 3;
@@ -159,6 +167,50 @@ void Settings::setHeartColor(const String& hex) {
     }
 }
 
+String Settings::getLyricColor() {
+    return _lyricColor;
+}
+
+void Settings::setLyricColor(const String& hex) {
+    _lyricColor = hex;
+    if (_initialized) {
+        _preferences.putString("lyricColor", _lyricColor);
+    }
+}
+
+bool Settings::getLyricGlow() {
+    return _lyricGlow;
+}
+
+void Settings::setLyricGlow(bool enabled) {
+    _lyricGlow = enabled;
+    if (_initialized) {
+        _preferences.putBool("lyricGlow", _lyricGlow);
+    }
+}
+
+bool Settings::getLyricRainbow() {
+    return _lyricRainbow;
+}
+
+void Settings::setLyricRainbow(bool enabled) {
+    _lyricRainbow = enabled;
+    if (_initialized) {
+        _preferences.putBool("lyricRainbow", _lyricRainbow);
+    }
+}
+
+bool Settings::getLyricFull() {
+    return _lyricFull;
+}
+
+void Settings::setLyricFull(bool enabled) {
+    _lyricFull = enabled;
+    if (_initialized) {
+        _preferences.putBool("lyricFull", _lyricFull);
+    }
+}
+
 void Settings::clearAll() {
     if (_initialized) {
         _preferences.clear();
@@ -169,6 +221,10 @@ void Settings::clearAll() {
         _latitude = DEFAULT_LATITUDE;
         _longitude = DEFAULT_LONGITUDE;
         _heartColor = DEFAULT_HEART_COLOR;
+        _lyricColor = DEFAULT_LYRIC_COLOR;
+        _lyricGlow = false;
+        _lyricRainbow = false;
+        _lyricFull = false;
         _displayMode = 0;
         _rotation = Config::DEFAULT_ROTATION;
         _slideshowInterval = 5;

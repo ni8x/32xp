@@ -15,7 +15,16 @@ App::App()
       _lastRotation(255),
       _lastClockUpdate(0),
       _lastLyricLine(""),
+      _lastLyricColor(""),
+      _lastLyricGlow(false),
+      _lastLyricRainbow(false),
+      _lastLyricFull(false),
+      _lastLyricDraw(0),
       _lastLyricProgress(255),
+      _lastCurrX(0),
+      _lastCurrY(0),
+      _lastCurrW(0),
+      _lastCurrH(0),
       _lastLyricActive(false),
       _lastPhoneConnected(false),
       _lastLyricTitle(""),
@@ -66,10 +75,78 @@ void App::drawLyricsScreen() {
         _lyricsManager.isPhoneConnected() != _lastPhoneConnected ||
         _lyricsManager.getTitle() != _lastLyricTitle;
 
-    if (!stateChanged) {
+    String current = _lyricsManager.getCurrentLine();
+
+    // Rainbow needs continuous redraws to animate. Glow alone is static, so it
+    // never forces periodic redraws (no flicker); and when the rainbow animates,
+    // only the current-line region is refreshed (see below), never the whole
+    // screen.
+    bool glow = _settings.getLyricGlow();
+    bool rainbow = _settings.getLyricRainbow();
+    bool animTick = rainbow && current.length() > 0 && (millis() - _lastLyricDraw >= 90);
+
+    if (!stateChanged && !animTick) {
         return; // No change, skip redraw
     }
-    _lastLyricLine = _lyricsManager.getCurrentLine();
+    _lastLyricDraw = millis();
+
+    const int16_t dispW = _display.width();
+    const int16_t dispH = _display.height();
+    const bool landscape = dispW > dispH;
+    const bool full = _settings.getLyricFull();
+    uint16_t lyricColor = Display::hexToRGB565(_settings.getLyricColor());
+
+    // Current-line geometry (shared by the full redraw and the anim tick).
+    uint8_t currSize = 1;
+    int16_t currY = 0;
+    String curr = "";
+    if (current.length() > 0) {
+        if (full) {
+            // Full-screen style: biggest size that fits (3, then 2, then 1).
+            currSize = (_display.measureText(current.c_str(), 3) <= (uint16_t)(dispW - 40)) ? 3
+                     : (_display.measureText(current.c_str(), 2) <= (uint16_t)(dispW - 40)) ? 2 : 1;
+            currY = (dispH - (int16_t)(16 * currSize)) / 2;
+        } else {
+            currSize = (_display.measureText(current.c_str(), 2) <= (uint16_t)(dispW - 40)) ? 2 : 1;
+            currY = landscape ? 110 : 160;
+        }
+        curr = _display.fitText(current, currSize, dispW - 20);
+    }
+
+    // Draw just the current lyric line (with effects) at a given Y. When
+    // outX/outW are given, the drawn line's bounding box is returned so the
+    // animation tick can erase exactly that region.
+    auto drawCurrLine = [&](int16_t y, int16_t* outX = nullptr, int16_t* outW = nullptr) {
+        if (curr.isEmpty()) return;
+        if (glow || rainbow) {
+            // ~10ms per hue step -> one full rainbow sweep every ~2.5s
+            uint8_t hueBase = (uint8_t)(millis() / 10);
+            _display.drawCenteredTextEffect(y, curr.c_str(), lyricColor, currSize,
+                                            glow, rainbow, hueBase, outX, outW);
+        } else {
+            _display.drawCenteredTextAt(y, curr.c_str(), lyricColor, currSize);
+            if (outX || outW) {
+                int16_t w = (int16_t)_display.measureText(curr.c_str(), currSize);
+                if (outX) *outX = (dispW - w) / 2;
+                if (outW) *outW = w;
+            }
+        }
+    };
+
+    if (!stateChanged) {
+        // Animation tick: only the current line changes, so erase just its
+        // bounding box (plus glow margin) and redraw it. The rest of the
+        // screen is untouched -> no visible flicker.
+        if (current.length() > 0 && _lastCurrW > 0) {
+            int16_t pad = 3 * currSize + 2; // covers the glow halo margin
+            _display.drawFilledRectangle(_lastCurrX - pad, _lastCurrY - pad,
+                                         _lastCurrW + 2 * pad, _lastCurrH + 2 * pad, BLACK);
+            drawCurrLine(_lastCurrY);
+        }
+        return;
+    }
+
+    _lastLyricLine = current;
     _lastLyricProgress = _lyricsManager.getProgress();
     _lastLyricActive = _lyricsManager.isActive();
     _lastPhoneConnected = _lyricsManager.isPhoneConnected();
@@ -78,8 +155,6 @@ void App::drawLyricsScreen() {
     _display.fillScreen(BLACK);
 
     // --- Header: Song info at top ---
-    // drawCenteredTextAt centers horizontally at the given Y position.
-    // (drawCenteredText would center vertically and be overdrawn by the lyric line.)
     String header = "";
     if (_lyricsManager.getTitle().length() > 0) {
         header = _lyricsManager.getTitle();
@@ -87,54 +162,48 @@ void App::drawLyricsScreen() {
             header += " - " + _lyricsManager.getArtist();
         }
     }
-    const int16_t dispW = _display.width();
-    const int16_t dispH = _display.height();
-    // Landscape (320x240) has ~80px less vertical room than portrait, so the
-    // three lyric lines and the idle/status messages get compressed Y values.
-    const bool landscape = dispW > dispH;
     if (header.length() > 0) {
         header = _display.fitText(header, 1, dispW - 20);
         _display.drawCenteredTextAt(2, header.c_str(), YELLOW, 1);
         _display.drawLine(10, 20, dispW - 10, 20, RGB565(64, 64, 64));
     }
 
-    String current = _lyricsManager.getCurrentLine();
-
     if (current.length() > 0) {
-        // Previous line above current (dim, small)
-        String prev = _lyricsManager.getPrevLine();
-        if (prev.length() > 0) {
-            prev = _display.fitText(prev, 1, dispW - 20);
-            _display.drawCenteredTextAt(landscape ? 64 : 110, prev.c_str(), RGB565(60, 60, 60), 1);
+        // Context lines are hidden in full-screen style.
+        if (!full) {
+            String prev = _lyricsManager.getPrevLine();
+            if (prev.length() > 0) {
+                prev = _display.fitText(prev, 1, dispW - 20);
+                _display.drawCenteredTextAt(landscape ? 64 : 110, prev.c_str(), RGB565(60, 60, 60), 1);
+            }
+            String nxt = _lyricsManager.getNextLine();
+            if (nxt.length() > 0) {
+                nxt = _display.fitText(nxt, 1, dispW - 20);
+                _display.drawCenteredTextAt(landscape ? 156 : 210, nxt.c_str(), RGB565(60, 60, 60), 1);
+            }
         }
 
-        // Current line (bright, large, centered): use the big font only when
-        // the full line actually fits, otherwise fall back to size 1.
-        uint8_t currSize = (_display.measureText(current.c_str(), 2) <= (uint16_t)(dispW - 40)) ? 2 : 1;
-        String curr = _display.fitText(current, currSize, dispW - 20);
-        _display.drawCenteredTextAt(landscape ? 110 : 160, curr.c_str(), CYAN, currSize);
-
-        // Next line below current (dim, small)
-        String nxt = _lyricsManager.getNextLine();
-        if (nxt.length() > 0) {
-            nxt = _display.fitText(nxt, 1, dispW - 20);
-            _display.drawCenteredTextAt(landscape ? 156 : 210, nxt.c_str(), RGB565(60, 60, 60), 1);
-        }
-    } else if (_lyricsManager.isActive()) {
-        // Song known but no active line yet
-        // 18px spacing: unifont glyphs are 16px tall at size 1
-        _display.drawCenteredTextAt(landscape ? 96 : 150, "Waiting for", RGB565(100, 100, 100), 1);
-        _display.drawCenteredTextAt(landscape ? 114 : 168, "lyrics...", RGB565(100, 100, 100), 1);
-    } else if (_lyricsManager.isPhoneConnected()) {
-        // Phone connected but no active lyrics yet
-        _display.drawCenteredTextAt(landscape ? 72 : 140, "Lyrics Mode", RGB565(60, 60, 60), 2);
-        _display.drawCenteredTextAt(landscape ? 116 : 175, "Phone Connected", GREEN, 1);
-        _display.drawCenteredTextAt(landscape ? 134 : 193, "Waiting for lyrics...", RGB565(100, 100, 100), 1);
+        // Remember where the current line was drawn so anim ticks can erase it.
+        drawCurrLine(currY, &_lastCurrX, &_lastCurrW);
+        _lastCurrY = currY;
+        _lastCurrH = 16 * currSize;
     } else {
-        // Idle state - phone not connected
-        _display.drawCenteredTextAt(landscape ? 72 : 140, "Lyrics Mode", RGB565(60, 60, 60), 2);
-        _display.drawCenteredTextAt(landscape ? 116 : 175, "Connect Android app", RGB565(80, 80, 80), 1);
-        _display.drawCenteredTextAt(landscape ? 134 : 193, "to send lyrics", RGB565(80, 80, 80), 1);
+        _lastCurrW = 0; // nothing to partially redraw
+        if (_lyricsManager.isActive()) {
+            // Song known but no active line yet
+            _display.drawCenteredTextAt(landscape ? 96 : 150, "Waiting for", RGB565(100, 100, 100), 1);
+            _display.drawCenteredTextAt(landscape ? 114 : 168, "lyrics...", RGB565(100, 100, 100), 1);
+        } else if (_lyricsManager.isPhoneConnected()) {
+            // Phone connected but no active lyrics yet
+            _display.drawCenteredTextAt(landscape ? 72 : 140, "Lyrics Mode", RGB565(60, 60, 60), 2);
+            _display.drawCenteredTextAt(landscape ? 116 : 175, "Phone Connected", GREEN, 1);
+            _display.drawCenteredTextAt(landscape ? 134 : 193, "Waiting for lyrics...", RGB565(100, 100, 100), 1);
+        } else {
+            // Idle state - phone not connected
+            _display.drawCenteredTextAt(landscape ? 72 : 140, "Lyrics Mode", RGB565(60, 60, 60), 2);
+            _display.drawCenteredTextAt(landscape ? 116 : 175, "Connect Android app", RGB565(80, 80, 80), 1);
+            _display.drawCenteredTextAt(landscape ? 134 : 193, "to send lyrics", RGB565(80, 80, 80), 1);
+        }
     }
 
     // --- Progress bar at bottom (when active) ---
@@ -146,7 +215,7 @@ void App::drawLyricsScreen() {
         int16_t filled = (progress * barW) / 100;
         _display.drawRectangle(barX, barY, barW, 6, RGB565(40, 40, 40));
         if (filled > 0) {
-            _display.drawFilledRectangle(barX + 1, barY + 1, filled - 1, 4, CYAN);
+            _display.drawFilledRectangle(barX + 1, barY + 1, filled - 1, 4, lyricColor);
         }
     }
 
@@ -315,6 +384,25 @@ void App::update() {
                 drawDefaultScreen();
             }
         }
+    }
+
+    // Lyric style change (color/glow/rainbow/full via web UI): clear the lyric
+    // redraw cache so the screen re-renders with the new style on THIS loop.
+    String lyricColor = _settings.getLyricColor();
+    bool lyricGlow = _settings.getLyricGlow();
+    bool lyricRainbow = _settings.getLyricRainbow();
+    bool lyricFull = _settings.getLyricFull();
+    if (lyricColor != _lastLyricColor || lyricGlow != _lastLyricGlow ||
+        lyricRainbow != _lastLyricRainbow || lyricFull != _lastLyricFull) {
+        _lastLyricColor = lyricColor;
+        _lastLyricGlow = lyricGlow;
+        _lastLyricRainbow = lyricRainbow;
+        _lastLyricFull = lyricFull;
+        _lastLyricLine = "";
+        _lastLyricProgress = 255;
+        _lastLyricActive = false;
+        _lastPhoneConnected = false;
+        _lastLyricTitle = "";
     }
 
     if (displayMode != _lastDisplayMode) {

@@ -33,7 +33,18 @@ private:
     uint8_t _lastRotation;
     uint32_t _lastClockUpdate;
     String _lastLyricLine;
+    String _lastLyricColor;
+    bool _lastLyricGlow;
+    bool _lastLyricRainbow;
+    bool _lastLyricFull;
+    uint32_t _lastLyricDraw;
     uint8_t _lastLyricProgress;
+    // Bounding box of the drawn current line; the animation tick erases only
+    // this region so the rest of the screen never flickers.
+    int16_t _lastCurrX;
+    int16_t _lastCurrY;
+    int16_t _lastCurrW;
+    int16_t _lastCurrH;
     bool _lastLyricActive;
     bool _lastPhoneConnected;
     String _lastLyricTitle;

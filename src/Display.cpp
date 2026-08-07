@@ -159,33 +159,193 @@ void Display::drawShapedText(int16_t x, int16_t y, const char* text, uint16_t co
     size_t n = layoutShapedText(text, items, 64, &w);
     if (n == 0) return;
 
+    for (size_t i = 0; i < n; i++) {
+        drawGlyph(x + items[i].x * size, y, items[i].codepoint, color, size);
+    }
+}
+
+void Display::drawGlyph(int16_t x, int16_t y, uint32_t cp, uint16_t color, uint8_t size) {
+    if (!_gfx) return;
+    // Encode the codepoint back to a single UTF-8 glyph string.
+    char buf[5];
+    size_t bl = 0;
+    if (cp < 0x80) {
+        buf[bl++] = (char)cp;
+    } else if (cp < 0x800) {
+        buf[bl++] = (char)(0xC0 | (cp >> 6));
+        buf[bl++] = (char)(0x80 | (cp & 0x3F));
+    } else if (cp < 0x10000) {
+        buf[bl++] = (char)(0xE0 | (cp >> 12));
+        buf[bl++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        buf[bl++] = (char)(0x80 | (cp & 0x3F));
+    } else {
+        buf[bl++] = (char)(0xF0 | (cp >> 18));
+        buf[bl++] = (char)(0x80 | ((cp >> 12) & 0x3F));
+        buf[bl++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        buf[bl++] = (char)(0x80 | (cp & 0x3F));
+    }
+    buf[bl] = '\0';
+
     _gfx->setTextColor(color);
     _gfx->setTextSize(size);
-    for (size_t i = 0; i < n; i++) {
-        // Encode the codepoint back to a single UTF-8 glyph string.
-        char buf[5];
-        size_t bl = 0;
-        uint32_t cp = items[i].codepoint;
-        if (cp < 0x80) {
-            buf[bl++] = (char)cp;
-        } else if (cp < 0x800) {
-            buf[bl++] = (char)(0xC0 | (cp >> 6));
-            buf[bl++] = (char)(0x80 | (cp & 0x3F));
-        } else if (cp < 0x10000) {
-            buf[bl++] = (char)(0xE0 | (cp >> 12));
-            buf[bl++] = (char)(0x80 | ((cp >> 6) & 0x3F));
-            buf[bl++] = (char)(0x80 | (cp & 0x3F));
-        } else {
-            buf[bl++] = (char)(0xF0 | (cp >> 18));
-            buf[bl++] = (char)(0x80 | ((cp >> 12) & 0x3F));
-            buf[bl++] = (char)(0x80 | ((cp >> 6) & 0x3F));
-            buf[bl++] = (char)(0x80 | (cp & 0x3F));
-        }
-        buf[bl] = '\0';
+    _gfx->setCursor(x, y);
+    _gfx->print(buf);
+}
 
-        _gfx->setCursor(x + items[i].x * size, y);
-        _gfx->print(buf);
+uint16_t Display::dimColor(uint16_t color, uint8_t level) {
+    // Cheap ~50%^level brightness: shift RGB565 right each step, masking out
+    // the bits shifted into each channel.
+    while (level-- > 0) {
+        color = (color >> 1) & 0x7BEF;
     }
+    return color;
+}
+
+uint16_t Display::hueToRGB565(uint8_t hue) {
+    // Adafruit-style rainbow wheel: red -> yellow -> green -> cyan -> blue -> magenta.
+    uint8_t r = 0, g = 0, b = 0;
+    if (hue < 85) {            // red -> yellow
+        r = 255 - hue * 3;
+        g = hue * 3;
+    } else if (hue < 170) {    // yellow -> green -> cyan
+        hue -= 85;
+        r = 0;
+        g = 255 - hue * 3;
+        b = hue * 3;
+    } else {                   // cyan -> blue -> magenta
+        hue -= 170;
+        r = hue * 3;
+        g = 0;
+        b = 255 - hue * 3;
+    }
+    return RGB565(r, g, b);
+}
+
+void Display::drawRainbowText(int16_t x, int16_t y, const char* text, uint8_t size, uint8_t hueBase, uint8_t dimLevel) {
+    if (!_gfx || !text) return;
+    if (ScriptShaping::containsShapedScript(text)) {
+        // Should not happen: shaped text is handled by drawCenteredTextEffect.
+        drawShapedText(x, y, text, hueToRGB565(hueBase), size);
+        return;
+    }
+
+    // Plain path: walk codepoints, drawing each with its own hue.
+    _gfx->setTextSize(size);
+    int16_t cx = x;
+    size_t i = 0, gi = 0;
+    const size_t len = strlen(text);
+    while (i < len) {
+        uint8_t b = (uint8_t)text[i];
+        size_t cpLen = 1;
+        uint32_t cp = (uint8_t)text[i];
+        if (b >= 0xF0) {
+            cpLen = 4;
+            cp = ((uint32_t)((uint8_t)text[i] & 0x07) << 18) |
+                 ((uint32_t)((uint8_t)text[i+1] & 0x3F) << 12) |
+                 ((uint32_t)((uint8_t)text[i+2] & 0x3F) << 6) |
+                 ((uint32_t)((uint8_t)text[i+3] & 0x3F));
+        } else if (b >= 0xE0) {
+            cpLen = 3;
+            cp = ((uint32_t)((uint8_t)text[i] & 0x0F) << 12) |
+                 ((uint32_t)((uint8_t)text[i+1] & 0x3F) << 6) |
+                 ((uint32_t)((uint8_t)text[i+2] & 0x3F));
+        } else if (b >= 0xC0) {
+            cpLen = 2;
+            cp = ((uint32_t)((uint8_t)text[i] & 0x1F) << 6) |
+                 ((uint32_t)((uint8_t)text[i+1] & 0x3F));
+        }
+
+        uint16_t c = hueToRGB565(hueBase + (uint8_t)(gi * 22));
+        if (dimLevel) c = dimColor(c, dimLevel);
+        // Arduino_GFX hides Print::write(buffer,len), so print a NUL-terminated
+        // copy of this codepoint through the normal UTF-8 print path.
+        char g[5];
+        memcpy(g, text + i, cpLen);
+        g[cpLen] = '\0';
+        _gfx->setTextColor(c);
+        _gfx->setCursor(cx, y);
+        _gfx->print(g);
+        cx += glyphAdvance(cp) * size;
+        i += cpLen;
+        gi++;
+    }
+}
+
+void Display::drawCenteredTextEffect(int16_t y, const char* text, uint16_t color, uint8_t size,
+                                     bool glow, bool rainbow, uint8_t hueBase,
+                                     int16_t* outX, int16_t* outW) {
+    if (!_gfx || !text || strlen(text) == 0) {
+        if (outX) *outX = 0;
+        if (outW) *outW = 0;
+        return;
+    }
+
+    int16_t x = 0, w = 0;
+    const bool shaped = ScriptShaping::containsShapedScript(text);
+    if (shaped) {
+        w = (int16_t)measureShapedText(text, size);
+        x = (_gfx->width() - w) / 2;
+    } else {
+        int16_t x1, y1;
+        uint16_t ww, h;
+        _gfx->setTextSize(size);
+        _gfx->getTextBounds(text, 0, 0, &x1, &y1, &ww, &h);
+        w = (int16_t)ww;
+        x = ((int16_t)_gfx->width() - w) / 2;
+    }
+    if (outX) *outX = x;
+    if (outW) *outW = w;
+
+    // The shaped layout is computed ONCE per call and reused by every halo
+    // pass; re-running the script shaping per pass would waste CPU on every
+    // animated frame (25 passes for a 2-ring glow + main).
+    ShapedLayoutItem items[64];
+    size_t nItems = 0;
+    if (shaped) {
+        int16_t lw = 0;
+        nItems = layoutShapedText(text, items, 64, &lw);
+        if (nItems == 0) return;
+    }
+
+    // One full render pass of the text at a pixel offset with a dim level
+    // (0 = full brightness). Rainbow colors per glyph; glow dims everything.
+    auto renderPass = [&](int16_t ox, int16_t oy, uint8_t dimLevel) {
+        int16_t px = x + ox, py = y + oy;
+        if (shaped) {
+            if (rainbow) {
+                for (size_t i = 0; i < nItems; i++) {
+                    uint16_t c = hueToRGB565(hueBase + (uint8_t)(i * 22));
+                    if (dimLevel) c = dimColor(c, dimLevel);
+                    drawGlyph(px + items[i].x * size, py, items[i].codepoint, c, size);
+                }
+            } else {
+                uint16_t c = dimLevel ? dimColor(color, dimLevel) : color;
+                for (size_t i = 0; i < nItems; i++) {
+                    drawGlyph(px + items[i].x * size, py, items[i].codepoint, c, size);
+                }
+            }
+        } else if (rainbow) {
+            drawRainbowText(px, py, text, size, hueBase, dimLevel);
+        } else {
+            drawText(px, py, text, dimLevel ? dimColor(color, dimLevel) : color, size);
+        }
+    };
+
+    if (glow) {
+        // Radiant halo: two square rings (1px + 2px at text size 1) with the
+        // brightness falling off 50% per ring, so it reads as a soft glow
+        // instead of a hard 1px outline.
+        static constexpr int16_t GLOW_RADIUS = 2; // px at text size 1 - tune me
+        for (int16_t r = GLOW_RADIUS; r >= 1; r--) {
+            for (int16_t dx = -r; dx <= r; dx++) {
+                for (int16_t dy = -r; dy <= r; dy++) {
+                    if (abs(dx) != r && abs(dy) != r) continue; // ring only
+                    renderPass(dx * size, dy * size, (uint8_t)r);
+                }
+            }
+        }
+    }
+    renderPass(0, 0, 0);
 }
 
 int16_t Display::glyphAdvance(uint32_t codepoint) {
