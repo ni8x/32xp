@@ -16,12 +16,14 @@ void LyricsManager::setLine(const String& current, const String& prev, const Str
     _nextLine = next;
     _progress = progress;
     _active = true;
+    _phoneConnected = true;
 }
 
 void LyricsManager::setNowPlaying(const String& artist, const String& title) {
     _artist = artist;
     _title = title;
     _active = true;
+    _phoneConnected = true;
     LOG_INFO(TAG, ("Now Playing: " + title + " - " + artist).c_str());
 }
 
@@ -40,6 +42,7 @@ void LyricsManager::stop() {
     _prevLine = "";
     _nextLine = "";
     _progress = 0;
+    _active = false;
 }
 
 const String& LyricsManager::getCurrentLine() const { return _currentLine; }

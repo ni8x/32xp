@@ -87,6 +87,16 @@ class LyricsSyncService : Service() {
         engine = eng
         eng.start(scope)
 
+        // The notification listener can detect the current song before this
+        // service is started. In that case rescanActive() intentionally ignores
+        // it as a duplicate, so send the cached song to this new engine now.
+        val cachedTitle = MusicNotificationListener.currentTitle
+        val cachedArtist = MusicNotificationListener.currentArtist
+        if (cachedTitle.isNotBlank() && cachedArtist.isNotBlank()) {
+            Log.d(TAG, "Starting sync with cached song: $cachedTitle - $cachedArtist")
+            eng.onSongChanged(cachedArtist, cachedTitle)
+        }
+
         // Repeatedly try to pick up any song already playing
         // (listener might connect at any time on some devices)
         scope.launch {

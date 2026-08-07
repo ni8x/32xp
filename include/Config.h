@@ -5,7 +5,7 @@
 namespace Config {
     // Application Info
     constexpr char APP_NAME[] = "ESP32-S3 Dashboard";
-    constexpr char FIRMWARE_VERSION[] = "0.1.7";
+    constexpr char FIRMWARE_VERSION[] = "0.2.2";
 
     // Display Constants
     constexpr uint16_t DISPLAY_WIDTH = 240;

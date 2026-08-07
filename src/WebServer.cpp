@@ -5,6 +5,7 @@
 #include "Logger.h"
 #include <LittleFS.h>
 #include <ArduinoJson.h>
+#include <AsyncJson.h>
 
 static const char* TAG = "WebServer";
 
@@ -65,6 +66,8 @@ const char index_html[] PROGMEM = R"rawliteral(
       <div class="row"><span>Artist:</span> <span class="value lyric-line" id="lyricArtist">-</span></div>
       <div class="row"><span>Line:</span> <span class="value lyric-line" id="lyricLine">-</span></div>
       <div class="row"><span>Progress:</span> <span class="value" id="lyricProgress">-</span></div>
+      <input type="text" id="manualLyric" placeholder="Manual display test text">
+      <button onclick="sendManualLyric()">Show Test Text</button>
       <p style="color: #888; font-size: 0.85em;">Tap TEST in the Android app to verify connection, then START to sync lyrics.</p>
     </div>
 
@@ -208,6 +211,17 @@ const char index_html[] PROGMEM = R"rawliteral(
       }
     }
 
+    function sendManualLyric() {
+      const text = document.getElementById('manualLyric').value.trim();
+      if (!text) return;
+      fetch('/api/lyrics/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'line', current: text, progress: 0 })
+      })
+        .then(() => updateData());
+    }
+
     function postData(url, body) {
       fetch(url, {
         method: 'POST',
@@ -278,6 +292,40 @@ void WebServer::setupRoutes() {
     _server.on("/api/status", HTTP_GET, [this](AsyncWebServerRequest *request){
         request->send(200, "application/json", buildStatusJson());
     });
+
+    // JSON handler for the web dashboard's "Show Test Text" (the app itself
+    // uses form-encoded POSTs to /api/lyrics/line, which parse reliably).
+    auto* lyricsJsonHandler = new AsyncCallbackJsonWebHandler("/api/lyrics/update",
+        [this](AsyncWebServerRequest *request, JsonVariant& json) {
+            JsonObject data = json.as<JsonObject>();
+            String type = data["type"] | "";
+            if (type == "line") {
+                String current = data["current"] | "";
+                if (current.isEmpty()) {
+                    request->send(400, "text/plain", "Missing current lyric line");
+                    return;
+                }
+                String prev = data["prev"] | "";
+                String next = data["next"] | "";
+                uint8_t progress = data["progress"] | 0;
+                _lyricsManager.setLine(current, prev, next, progress);
+                LOG_INFO(TAG, ("Lyric line received via JSON: " + current).c_str());
+            } else if (type == "song") {
+                String artist = data["artist"] | "";
+                String title = data["title"] | "";
+                if (artist.isEmpty() || title.isEmpty()) {
+                    request->send(400, "text/plain", "Missing artist or title");
+                    return;
+                }
+                _lyricsManager.setNowPlaying(artist, title);
+                LOG_INFO(TAG, ("Now playing received via JSON: " + title).c_str());
+            } else {
+                request->send(400, "text/plain", "Unsupported lyrics update");
+                return;
+            }
+            request->send(200, "text/plain", "OK");
+        });
+    _server.addHandler(lyricsJsonHandler);
 
     _server.on("/api/heartcolor", HTTP_POST, [this](AsyncWebServerRequest *request){
         if (request->hasParam("color", true)) {
@@ -421,13 +469,17 @@ void WebServer::setupRoutes() {
     // === Lyrics API Endpoints (for Android app) ===
 
     _server.on("/api/lyrics/line", HTTP_POST, [this](AsyncWebServerRequest *request){
-        if (request->hasParam("current", true)) {
-            String current = request->getParam("current", true)->value();
-            String prev = request->hasParam("prev", true) ? request->getParam("prev", true)->value() : "";
-            String next = request->hasParam("next", true) ? request->getParam("next", true)->value() : "";
-            uint8_t prog = request->hasParam("progress", true) ? (uint8_t)request->getParam("progress", true)->value().toInt() : 0;
-            _lyricsManager.setLine(current, prev, next, prog);
+        if (!request->hasParam("current", true)) {
+            LOG_ERROR(TAG, "Lyrics line request missing current parameter");
+            request->send(400, "text/plain", "Missing current lyric line");
+            return;
         }
+        String current = request->getParam("current", true)->value();
+        String prev = request->hasParam("prev", true) ? request->getParam("prev", true)->value() : "";
+        String next = request->hasParam("next", true) ? request->getParam("next", true)->value() : "";
+        uint8_t prog = request->hasParam("progress", true) ? (uint8_t)request->getParam("progress", true)->value().toInt() : 0;
+        _lyricsManager.setLine(current, prev, next, prog);
+        LOG_INFO(TAG, ("Lyric line received: " + current).c_str());
         request->send(200, "text/plain", "OK");
     });
 
@@ -457,5 +509,16 @@ void WebServer::setupRoutes() {
         _lyricsManager.setPhoneConnected(true);
         LOG_INFO(TAG, "Phone ping received");
         request->send(200, "text/plain", "OK");
+    });
+
+    _server.on("/api/lyrics/test", HTTP_POST, [this](AsyncWebServerRequest *request){
+        if (!request->hasParam("text", true)) {
+            request->send(400, "text/plain", "Missing text");
+            return;
+        }
+        String text = request->getParam("text", true)->value();
+        _lyricsManager.setLine(text);
+        LOG_INFO(TAG, ("Display test text received: " + text).c_str());
+        request->send(200, "text/plain", "Displayed");
     });
 }
