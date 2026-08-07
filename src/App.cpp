@@ -25,6 +25,12 @@ App::App()
       _lastRotation(255),
       _lastTheme("default"),
       _lastClockUpdate(0),
+      _clockScreenValid(false),
+      _lastClockDate(""),
+      _lastClockCustom(""),
+      _lastClockTimeSize(0),
+      _lastClockTimeY(0),
+      _lastHeartColor(0),
       _lastLyricLine(""),
       _lastLyricColor(""),
       _lastLyricGlow(false),
@@ -385,72 +391,101 @@ void App::drawDefaultScreen() {
 }
 
 void App::drawClockScreen() {
-    _display.fillScreen(BLACK);
-    
     const int16_t dispW = _display.width();
     const int16_t dispH = _display.height();
     const bool landscape = dispW > dispH;
 
-    uint16_t heartColor = Display::hexToRGB565(_settings.getHeartColor());
-
-    // Theme colors: time digits + custom-text accent follow the active theme;
-    // the heart stays fully user-customizable (theme-seeded on selection).
+    // Theme colors: time digits + custom-text accent follow the active theme.
+    // The heart follows the theme palette too, unless the user picked a custom
+    // heart color - that explicit choice always wins.
     const Settings::ThemePalette* palette = Settings::getThemePalette(_settings.getTheme());
     uint16_t timeColor = Display::hexToRGB565(palette->timeHex);
     uint16_t accent = Display::hexToRGB565(palette->accentHex);
+    uint16_t heartColor = Display::hexToRGB565(_settings.isHeartColorCustom()
+        ? _settings.getHeartColor()
+        : palette->heartHex);
 
     String timeStr = _timeManager.getFormattedTime();
     String dateStr = _timeManager.getFormattedDate();
     String customText = _settings.getClockText();
 
+    // Full repaint only on the first draw (boot / rotation / theme / mode
+    // change) or when the date or custom text changed. Every other second just
+    // the time band is repainted, so the clock no longer flashes black.
+    bool fullDraw = !_clockScreenValid ||
+                    dateStr != _lastClockDate ||
+                    customText != _lastClockCustom ||
+                    heartColor != _lastHeartColor; // web heart color change
+
+    if (fullDraw) {
+        _display.fillScreen(BLACK);
+    } else if (_lastClockTimeSize > 0) {
+        // Erase the previous time region. The time string is monospace with a
+        // fixed width per size, so a full-width band covers the old digits.
+        int16_t bandTop = _lastClockTimeY - 14 * _lastClockTimeSize - 2;
+        int16_t bandH = 16 * _lastClockTimeSize + 8;
+        _display.drawFilledRectangle(0, bandTop, dispW, bandH, BLACK);
+    }
+
     if (landscape) {
-        // Landscape (320x240): heart on the left, big time right-aligned, date
-        // tucked under it, custom text bottom center. Uses the wide axis
-        // instead of squeezing a 320px-tall portrait stack into 240px.
-        _display.drawPixelHeart(40, (dispH - 35) / 2, heartColor, 5); // scale 5 = 40x35px
+        // Landscape (320x240): vertically balanced stack with the pixel heart
+        // centered on top, the big time centered under it, then the date and
+        // custom text at the bottom.
+        if (fullDraw) {
+            int16_t heartX = (dispW - 32) / 2; // scale 4 = 32x28px
+            _display.drawPixelHeart(heartX, 20, heartColor, 4);
+        }
+
+        uint8_t timeSize = 3;
+        int16_t timeY = 20 + 28 + 18 + 14 * timeSize; // clears the heart, then ink above y
+        _display.drawCenteredTextAt(timeY, timeStr.c_str(), timeColor, timeSize);
+
+        if (fullDraw) {
+            int16_t dateY = timeY + 60; // below the time ink + gap
+            int16_t dateW = _display.measureText(dateStr.c_str(), 2);
+            int16_t dateX = (dispW - dateW) / 2;
+            _display.drawText(dateX, dateY, dateStr.c_str(), WHITE, 2);
+
+            if (customText.length() > 0) {
+                int16_t cw = _display.measureText(customText.c_str(), 2);
+                _display.drawText((dispW - cw) / 2, dispH - 24, customText.c_str(), accent, 2);
+            }
+        }
+        _lastClockTimeSize = timeSize;
+        _lastClockTimeY = timeY;
+    } else {
+        // --- Portrait (240x320): heart above time, date + custom text below ---
+        if (fullDraw) {
+            // Large pixelated heart centered above time (scale 4 = 32x28px)
+            int16_t heartX = (dispW - (8 * 4)) / 2;
+            _display.drawPixelHeart(heartX, 20, heartColor, 4);
+        }
 
         uint8_t timeSize = 4;
-        int16_t timeW = _display.measureText(timeStr.c_str(), timeSize);
-        int16_t timeX = dispW - timeW - 24;
         int16_t timeY = (dispH - (int16_t)(16 * timeSize)) / 2;
-        _display.drawText(timeX, timeY, timeStr.c_str(), timeColor, timeSize);
+        _display.drawCenteredTextAt(timeY, timeStr.c_str(), timeColor, timeSize);
 
-        // Date centered under the time
-        int16_t dateW = _display.measureText(dateStr.c_str(), 2);
-        int16_t dateX = timeX + (timeW - dateW) / 2;
-        _display.drawText(dateX, timeY + 16 * timeSize + 10, dateStr.c_str(), WHITE, 2);
+        if (fullDraw) {
+            int16_t dateY = (dispH / 2) + 40;
+            int16_t dateWidth = _display.measureText(dateStr.c_str(), 2);
+            int16_t dateX = (dispW - dateWidth) / 2;
+            _display.drawText(dateX, dateY, dateStr.c_str(), WHITE, 2);
 
-        // Custom text bottom center
-        if (customText.length() > 0) {
-            int16_t cw = _display.measureText(customText.c_str(), 2);
-            _display.drawText((dispW - cw) / 2, dispH - 44, customText.c_str(), accent, 2);
+            if (customText.length() > 0) {
+                int16_t textWidth = _display.measureText(customText.c_str(), 2);
+                int16_t textX = (dispW - textWidth) / 2;
+                // +36: date glyphs are 32px tall at size 2 (8x16 unifont scaled x2)
+                _display.drawText(textX, dateY + 36, customText.c_str(), accent, 2);
+            }
         }
-        return;
+        _lastClockTimeSize = timeSize;
+        _lastClockTimeY = timeY;
     }
 
-    // --- Portrait (240x320): heart above time, date + custom text below ---
-    // Draw Large Pixelated Heart centered above time (scale 4 = 32x28px)
-    int16_t heartX = (dispW - (8 * 4)) / 2;
-    _display.drawPixelHeart(heartX, 20, heartColor, 4);
-
-    // Large time centered
-    _display.drawCenteredText(timeStr.c_str(), timeColor, 4);
-
-    // Date below time
-    int16_t dateY = (dispH / 2) + 40;
-    
-    // Draw directly to center bottom half (pixel-measured, UTF-8 aware)
-    int16_t dateWidth = _display.measureText(dateStr.c_str(), 2);
-    int16_t dateX = (dispW - dateWidth) / 2;
-    _display.drawText(dateX, dateY, dateStr.c_str(), WHITE, 2);
-
-    // Custom Text below date
-    if (customText.length() > 0) {
-        int16_t textWidth = _display.measureText(customText.c_str(), 2);
-        int16_t textX = (dispW - textWidth) / 2;
-        // +36: date glyphs are 32px tall at size 2 (8x16 unifont scaled x2)
-        _display.drawText(textX, dateY + 36, customText.c_str(), accent, 2);
-    }
+    _lastClockDate = dateStr;
+    _lastClockCustom = customText;
+    _lastHeartColor = heartColor;
+    _clockScreenValid = true;
 }
 
 void App::update() {
@@ -481,6 +516,7 @@ void App::update() {
         } else {
             _wasTimeSynced = false;
             _lastClockUpdate = 0;
+            _clockScreenValid = false; // full repaint with the new layout/colors
             if (!_timeManager.isTimeSynced()) {
                 drawDefaultScreen();
             }
@@ -505,6 +541,7 @@ void App::update() {
         } else {
             _wasTimeSynced = false;
             _lastClockUpdate = 0;
+            _clockScreenValid = false; // full repaint with the new layout/colors
             if (!_timeManager.isTimeSynced()) {
                 drawDefaultScreen();
             }
@@ -545,6 +582,7 @@ void App::update() {
             LOG_INFO(TAG, "Leaving media/lyrics view");
             _mediaManager.stop();
             _wasTimeSynced = false;
+            _clockScreenValid = false;
         }
         _lastDisplayMode = displayMode;
     }

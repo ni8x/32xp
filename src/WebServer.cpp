@@ -113,6 +113,7 @@ const char index_html[] PROGMEM = R"rawliteral(
         <option value="default">Default</option>
         <option value="pikachu">Pikachu</option>
         <option value="cyberpunk">Cyberpunk</option>
+        <option value="midnight">Midnight</option>
       </select>
       <p style="color: #888; font-size: 0.85em; margin-top: 0;">Preset color scheme. Selecting a theme resets the lyric &amp; heart colors to its palette &mdash; you can still customize them below.</p>
       <label>Orientation</label>

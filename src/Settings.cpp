@@ -12,6 +12,7 @@ static const Settings::ThemePalette THEMES[] = {
     {"default",   "#00ffff", "#00d2ff", "#ffd700", "#00ffff", "#3c3c3c", "#404040", "#00ff00", "#646464", "#00ffff"},
     {"pikachu",  "#ffde00", "#ffb400", "#ffde00", "#ffe74c", "#4a432b", "#7a6a1e", "#a8d84f", "#8a7f4d", "#ffe74c"},
     {"cyberpunk", "#05d9e8", "#ff2a6d", "#ff2a6d", "#05d9e8", "#3d3a5c", "#522557", "#39ff14", "#6f6a8f", "#05d9e8"},
+    {"midnight", "#5ad0ff", "#4dd0e1", "#8ab4ff", "#aee8ff", "#2e3d5c", "#3a5a8a", "#5eead4", "#5a6e8a", "#8ab4ff"},
 };
 
 const Settings::ThemePalette* Settings::getThemePalette(const String& name) {
@@ -32,6 +33,7 @@ Settings::Settings()
       _longitude(DEFAULT_LONGITUDE),
       _theme("default"),
       _heartColor(DEFAULT_HEART_COLOR),
+      _heartColorSet(false),
       _lyricColor(DEFAULT_LYRIC_COLOR),
       _lyricGlow(false),
       _lyricRainbow(false),
@@ -68,6 +70,13 @@ void Settings::init() {
     String storedTheme = _preferences.getString("theme", "default");
     _theme = getThemePalette(storedTheme) ? storedTheme : "default";
     _heartColor = _preferences.getString("heartColor", DEFAULT_HEART_COLOR);
+    _heartColorSet = _preferences.getBool("heartColorSet", false);
+    // Migration: installs that predate the flag stored the user's heart color
+    // directly, so a stored color that differs from the current theme default
+    // is a legacy user choice and must keep winning over the theme palette.
+    if (!_heartColorSet && _heartColor != getThemePalette(_theme)->heartHex) {
+        _heartColorSet = true;
+    }
     _lyricColor = _preferences.getString("lyricColor", DEFAULT_LYRIC_COLOR);
     _lyricGlow = _preferences.getBool("lyricGlow", false);
     _lyricRainbow = _preferences.getBool("lyricRainbow", false);
@@ -194,10 +203,16 @@ void Settings::setTheme(const String& theme) {
     if (_initialized) {
         _preferences.putString("theme", _theme);
     }
-    // A theme is a preset look: seed the customizable colors to its palette.
-    // Anything the user tweaks afterwards (web UI) is kept as-is.
+    // A theme is a preset look: seed the lyric color to its palette and reset
+    // the heart to the palette default (clearing any previous manual choice, so
+    // it follows the theme again). Manual tweaks via the web UI still win.
     setLyricColor(palette->lyricHex);
-    setHeartColor(palette->heartHex);
+    _heartColor = palette->heartHex;
+    _heartColorSet = false;
+    if (_initialized) {
+        _preferences.putString("heartColor", _heartColor);
+        _preferences.putBool("heartColorSet", false);
+    }
     LOG_INFO(TAG, ("Theme applied: " + theme).c_str());
 }
 
@@ -207,9 +222,15 @@ String Settings::getHeartColor() {
 
 void Settings::setHeartColor(const String& hex) {
     _heartColor = hex;
+    _heartColorSet = true; // explicit user choice overrides the theme palette
     if (_initialized) {
         _preferences.putString("heartColor", _heartColor);
+        _preferences.putBool("heartColorSet", true);
     }
+}
+
+bool Settings::isHeartColorCustom() {
+    return _heartColorSet;
 }
 
 String Settings::getLyricColor() {
@@ -267,6 +288,7 @@ void Settings::clearAll() {
         _longitude = DEFAULT_LONGITUDE;
         _theme = "default";
         _heartColor = DEFAULT_HEART_COLOR;
+        _heartColorSet = false;
         _lyricColor = DEFAULT_LYRIC_COLOR;
         _lyricGlow = false;
         _lyricRainbow = false;

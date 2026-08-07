@@ -62,6 +62,13 @@ class Esp32Client(rawIp: String) {
 
     suspend fun clearLyrics(): Result<Unit> = postForm(path = "/api/lyrics/clear", body = "")
 
+    // Theme preset (default / pikachu / cyberpunk / midnight) - same endpoint
+    // as the web dashboard's theme dropdown.
+    suspend fun setTheme(theme: String): Result<Unit> = postForm(
+        path = "/api/theme",
+        body = "theme=${theme.urlEncode()}"
+    )
+
     private suspend fun postForm(path: String, body: String): Result<Unit> =
         withContext(Dispatchers.IO) {
             try {

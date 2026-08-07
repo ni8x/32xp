@@ -20,6 +20,7 @@ class LyricsSyncService : Service() {
         const val ACTION_START = "com.esp32dashboard.lyrics.START"
         const val ACTION_STOP = "com.esp32dashboard.lyrics.STOP"
         const val EXTRA_ESP32_IP = "esp32_ip"
+        const val EXTRA_THEME = "theme"
     }
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -55,7 +56,7 @@ class LyricsSyncService : Service() {
                 val ip = intent.getStringExtra(EXTRA_ESP32_IP) ?: return START_STICKY
                 currentIp = ip
                 startForeground(NOTIFICATION_ID, buildNotification("Starting..."))
-                startSync(ip)
+                startSync(ip, intent.getStringExtra(EXTRA_THEME) ?: "default")
             }
             ACTION_STOP -> {
                 stopSync()
@@ -66,9 +67,20 @@ class LyricsSyncService : Service() {
         return START_STICKY
     }
 
-    private fun startSync(ip: String) {
+    private fun startSync(ip: String, theme: String) {
         val client = Esp32Client(ip)
         esp32Client = client
+
+        // Push the app's theme choice so the display matches it. Only send when
+        // the user actually picked a theme here - "default" means leave the web
+        // dashboard's theme alone (applying a theme would also re-seed any
+        // lyric/heart colors customized there).
+        if (theme != "default") {
+            scope.launch {
+                client.setTheme(theme)
+                    .onFailure { Log.e(TAG, "Failed to send theme: ${it.message}") }
+            }
+        }
 
         val eng = LyricsEngine(
             esp32Client = client,

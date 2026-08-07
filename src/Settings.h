@@ -61,6 +61,10 @@ public:
     String getHeartColor();
     void setHeartColor(const String& hex);
 
+    // True once the user picked a heart color manually (web UI). The clock then
+    // uses that color; otherwise the heart follows the active theme palette.
+    bool isHeartColorCustom();
+
     String getLyricColor();
     void setLyricColor(const String& hex);
 
@@ -92,6 +96,7 @@ private:
     String _longitude;
     String _theme;
     String _heartColor;
+    bool _heartColorSet;
     String _lyricColor;
     bool _lyricGlow;
     bool _lyricRainbow;

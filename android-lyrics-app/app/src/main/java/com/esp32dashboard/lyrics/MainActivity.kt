@@ -9,8 +9,10 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
@@ -20,6 +22,7 @@ import kotlinx.coroutines.runBlocking
 class MainActivity : AppCompatActivity() {
 
     private lateinit var ipInput: EditText
+    private lateinit var themeSpinner: Spinner
     private lateinit var testButton: Button
     private lateinit var toggleButton: Button
     private lateinit var statusText: TextView
@@ -29,6 +32,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var sendTestTextButton: Button
 
     private var isRunning = false
+
+    // Spinner shows friendly labels; these raw keys are what the ESP32 expects.
+    private val themeKeys = arrayOf("default", "pikachu", "cyberpunk", "midnight")
 
     private val statusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -56,6 +62,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         ipInput = findViewById(R.id.ipInput)
+        themeSpinner = findViewById(R.id.themeSpinner)
         testButton = findViewById(R.id.testButton)
         toggleButton = findViewById(R.id.toggleButton)
         statusText = findViewById(R.id.statusText)
@@ -67,6 +74,16 @@ class MainActivity : AppCompatActivity() {
         // Load saved IP (normalize in case a slashed value was saved before)
         val prefs = getSharedPreferences("config", MODE_PRIVATE)
         ipInput.setText(Esp32Client.normalizeIp(prefs.getString("esp32_ip", "192.168.")))
+
+        themeSpinner.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            arrayOf("Default", "Pikachu", "Cyberpunk", "Midnight")
+        ).apply {
+            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
+        val savedThemeIndex = themeKeys.indexOf(prefs.getString("theme", "default")).coerceAtLeast(0)
+        themeSpinner.setSelection(savedThemeIndex)
 
         val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             RECEIVER_NOT_EXPORTED
@@ -210,13 +227,17 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // Save IP
+        // Save IP + theme
+        val theme = themeKeys[themeSpinner.selectedItemPosition]
         getSharedPreferences("config", MODE_PRIVATE).edit()
-            .putString("esp32_ip", ip).apply()
+            .putString("esp32_ip", ip)
+            .putString("theme", theme)
+            .apply()
 
         val intent = Intent(this, LyricsSyncService::class.java).apply {
             action = LyricsSyncService.ACTION_START
             putExtra(LyricsSyncService.EXTRA_ESP32_IP, ip)
+            putExtra(LyricsSyncService.EXTRA_THEME, theme)
         }
         startForegroundService(intent)
 

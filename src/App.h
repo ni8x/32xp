@@ -33,6 +33,14 @@ private:
     uint8_t _lastRotation;
     String _lastTheme;
     uint32_t _lastClockUpdate;
+    // Clock partial-redraw cache: while the date/custom text are unchanged only
+    // the time band is repainted each second, so the screen never flashes black.
+    bool _clockScreenValid;
+    String _lastClockDate;
+    String _lastClockCustom;
+    uint8_t _lastClockTimeSize;
+    int16_t _lastClockTimeY;
+    uint16_t _lastHeartColor; // heart redraws when the user changes it via web
     String _lastLyricLine;
     String _lastLyricColor;
     bool _lastLyricGlow;
