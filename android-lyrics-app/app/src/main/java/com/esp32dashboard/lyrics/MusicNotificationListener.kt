@@ -17,11 +17,27 @@ class MusicNotificationListener : NotificationListenerService() {
 
         // Known music app packages
         val MUSIC_PACKAGES = listOf(
-            "com.google.android.apps.youtube.music",  // Official YT Music
-            "app.morphe.android.apps.youtube.music",    // YT Music ReVanced
-            "app.morphe.android.youtube",               // YT ReVanced
-            "com.google.android.youtube",                // Official YouTube
-            "com.spotify.music",                         // Spotify
+            // YouTube Music family
+            "com.google.android.apps.youtube.music",       // Official YT Music
+            "app.morphe.android.apps.youtube.music",       // YT Music (Morpheus fork)
+            "app.revanced.android.apps.youtube.music",     // YT Music ReVanced
+            "app.rvx.android.apps.youtube.music",          // YT Music ReVanced Extended
+            "com.vanced.android.apps.youtube.music",       // YT Music Vanced (legacy)
+            // YouTube family
+            "com.google.android.youtube",                   // Official YouTube
+            "app.morphe.android.youtube",                   // YouTube (Morpheus fork)
+            "app.revanced.android.youtube",                 // YouTube ReVanced
+            // Other streaming services
+            "com.spotify.music",                            // Spotify
+            "com.apple.android.music",                      // Apple Music
+            "com.amazon.mp3",                               // Amazon Music
+            "com.soundcloud.android",                       // SoundCloud
+            "deezer.android.app",                           // Deezer
+            "com.gaana.app",                                // Gaana
+            "com.jiosaavn.android",                         // JioSaavn
+            "com.pandora.android",                          // Pandora
+            // Local playback
+            "com.maxmpz.audioplayer",                       // Poweramp
         )
 
         const val ACTION_SONG_CHANGED = "com.esp32dashboard.lyrics.SONG_CHANGED"
