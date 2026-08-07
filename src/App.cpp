@@ -12,6 +12,7 @@ App::App()
       _wasWifiConnected(false),
       _wasTimeSynced(false),
       _lastDisplayMode(255),
+      _lastRotation(255),
       _lastClockUpdate(0),
       _lastLyricLine(""),
       _lastLyricProgress(255),
@@ -32,6 +33,8 @@ void App::init() {
 
     _settings.init();
     _display.init(_settings.getBrightness());
+    _display.setRotation(_settings.getRotation());
+    _lastRotation = _settings.getRotation();
     _lastBrightness = _settings.getBrightness();
 
     // Default credentials are only written on first boot (no saved SSID yet),
@@ -84,12 +87,15 @@ void App::drawLyricsScreen() {
             header += " - " + _lyricsManager.getArtist();
         }
     }
-    if (header.length() > 24) {
-        header = header.substring(0, 22) + "..";
-    }
+    const int16_t dispW = _display.width();
+    const int16_t dispH = _display.height();
+    // Landscape (320x240) has ~80px less vertical room than portrait, so the
+    // three lyric lines and the idle/status messages get compressed Y values.
+    const bool landscape = dispW > dispH;
     if (header.length() > 0) {
+        header = _display.fitText(header, 1, dispW - 20);
         _display.drawCenteredTextAt(2, header.c_str(), YELLOW, 1);
-        _display.drawLine(10, 16, Config::DISPLAY_WIDTH - 10, 16, RGB565(64, 64, 64));
+        _display.drawLine(10, 20, dispW - 10, 20, RGB565(64, 64, 64));
     }
 
     String current = _lyricsManager.getCurrentLine();
@@ -98,41 +104,43 @@ void App::drawLyricsScreen() {
         // Previous line above current (dim, small)
         String prev = _lyricsManager.getPrevLine();
         if (prev.length() > 0) {
-            if (prev.length() > 30) prev = prev.substring(0, 28) + "..";
-            _display.drawCenteredTextAt(110, prev.c_str(), RGB565(60, 60, 60), 1);
+            prev = _display.fitText(prev, 1, dispW - 20);
+            _display.drawCenteredTextAt(landscape ? 64 : 110, prev.c_str(), RGB565(60, 60, 60), 1);
         }
 
-        // Current line (bright, large, centered)
-        uint8_t currSize = (current.length() > 18) ? 1 : 2;
-        String curr = (current.length() > 36) ? current.substring(0, 34) + ".." : current;
-        _display.drawCenteredTextAt(160, curr.c_str(), CYAN, currSize);
+        // Current line (bright, large, centered): use the big font only when
+        // the full line actually fits, otherwise fall back to size 1.
+        uint8_t currSize = (_display.measureText(current.c_str(), 2) <= (uint16_t)(dispW - 40)) ? 2 : 1;
+        String curr = _display.fitText(current, currSize, dispW - 20);
+        _display.drawCenteredTextAt(landscape ? 110 : 160, curr.c_str(), CYAN, currSize);
 
         // Next line below current (dim, small)
         String nxt = _lyricsManager.getNextLine();
         if (nxt.length() > 0) {
-            if (nxt.length() > 30) nxt = nxt.substring(0, 28) + "..";
-            _display.drawCenteredTextAt(210, nxt.c_str(), RGB565(60, 60, 60), 1);
+            nxt = _display.fitText(nxt, 1, dispW - 20);
+            _display.drawCenteredTextAt(landscape ? 156 : 210, nxt.c_str(), RGB565(60, 60, 60), 1);
         }
     } else if (_lyricsManager.isActive()) {
         // Song known but no active line yet
-        _display.drawCenteredTextAt(150, "Waiting for", RGB565(100, 100, 100), 1);
-        _display.drawCenteredTextAt(165, "lyrics...", RGB565(100, 100, 100), 1);
+        // 18px spacing: unifont glyphs are 16px tall at size 1
+        _display.drawCenteredTextAt(landscape ? 96 : 150, "Waiting for", RGB565(100, 100, 100), 1);
+        _display.drawCenteredTextAt(landscape ? 114 : 168, "lyrics...", RGB565(100, 100, 100), 1);
     } else if (_lyricsManager.isPhoneConnected()) {
         // Phone connected but no active lyrics yet
-        _display.drawCenteredTextAt(140, "Lyrics Mode", RGB565(60, 60, 60), 2);
-        _display.drawCenteredTextAt(175, "Phone Connected", GREEN, 1);
-        _display.drawCenteredTextAt(190, "Waiting for lyrics...", RGB565(100, 100, 100), 1);
+        _display.drawCenteredTextAt(landscape ? 72 : 140, "Lyrics Mode", RGB565(60, 60, 60), 2);
+        _display.drawCenteredTextAt(landscape ? 116 : 175, "Phone Connected", GREEN, 1);
+        _display.drawCenteredTextAt(landscape ? 134 : 193, "Waiting for lyrics...", RGB565(100, 100, 100), 1);
     } else {
         // Idle state - phone not connected
-        _display.drawCenteredTextAt(140, "Lyrics Mode", RGB565(60, 60, 60), 2);
-        _display.drawCenteredTextAt(175, "Connect Android app", RGB565(80, 80, 80), 1);
-        _display.drawCenteredTextAt(190, "to send lyrics", RGB565(80, 80, 80), 1);
+        _display.drawCenteredTextAt(landscape ? 72 : 140, "Lyrics Mode", RGB565(60, 60, 60), 2);
+        _display.drawCenteredTextAt(landscape ? 116 : 175, "Connect Android app", RGB565(80, 80, 80), 1);
+        _display.drawCenteredTextAt(landscape ? 134 : 193, "to send lyrics", RGB565(80, 80, 80), 1);
     }
 
     // --- Progress bar at bottom (when active) ---
     if (_lyricsManager.isActive() && current.length() > 0) {
-        int16_t barY = Config::DISPLAY_HEIGHT - 16;
-        int16_t barW = Config::DISPLAY_WIDTH - 40;
+        int16_t barY = dispH - 16;
+        int16_t barW = dispW - 40;
         int16_t barX = 20;
         uint8_t progress = _lyricsManager.getProgress();
         int16_t filled = (progress * barW) / 100;
@@ -144,70 +152,134 @@ void App::drawLyricsScreen() {
 
     // Active indicator dot
     if (_lyricsManager.isActive()) {
-        _display.drawCircle(Config::DISPLAY_WIDTH - 8, Config::DISPLAY_HEIGHT - 8, 3, GREEN);
+        _display.drawCircle(dispW - 8, dispH - 8, 3, GREEN);
     }
 }
 
 void App::drawDefaultScreen() {
     _display.fillScreen(BLACK);
     
+    const int16_t dispW = _display.width();
+    const bool landscape = dispW > _display.height();
+
     // Header
-    _display.drawCenteredText("DEVICE DASHBOARD", WHITE, 2);
-    _display.drawLine(10, 30, Config::DISPLAY_WIDTH - 10, 30, GREEN);
-
-    // Wi-Fi Section
-    _display.drawText(10, 50, "Wi-Fi Status:", YELLOW, 2);
-    
-    String statusStr = _wifiManager.getStatusString();
-    uint16_t statusColor = _wifiManager.isConnected() ? GREEN : RED;
-    _display.drawText(10, 80, statusStr.c_str(), statusColor, 2);
-
-    // Web Dashboard section - the URL to open in a browser
-    _display.drawText(10, 130, "Web Dashboard:", YELLOW, 2);
-
-    if (_wifiManager.isConnected()) {
-        String url = "http://" + _wifiManager.ipAddress();
-        // Use big text only when it fits (max ~19 chars at size 2), else fall back
-        uint8_t urlSize = (url.length() <= 19) ? 2 : 1;
-        _display.drawCenteredTextAt(165, url.c_str(), CYAN, urlSize);
-
-        _display.drawText(10, 205, "Open in phone browser", WHITE, 1);
-        _display.drawText(10, 220, "to control display", WHITE, 1);
+    if (landscape) {
+        // Top-anchor the title in landscape: drawCenteredText would vertically
+        // center it in the short 240px frame and collide with the content.
+        _display.drawCenteredTextAt(6, "DEVICE DASHBOARD", WHITE, 2);
+        _display.drawLine(10, 44, dispW - 10, 44, GREEN);
     } else {
-        _display.drawCenteredTextAt(165, "Waiting for Wi-Fi...", RGB565(100, 100, 100), 1);
-        _display.drawText(10, 205, "Web address will appear", WHITE, 1);
-        _display.drawText(10, 220, "once connected", WHITE, 1);
+        _display.drawCenteredText("DEVICE DASHBOARD", WHITE, 2);
+        _display.drawLine(10, 30, dispW - 10, 30, GREEN);
+    }
+
+    if (landscape) {
+        // Landscape (320x240): stack the sections more tightly since there is
+        // less vertical room, but the URL still fits at size 2 on the wide axis.
+        _display.drawText(10, 46, "Wi-Fi Status:", YELLOW, 2);
+        String statusStr = _wifiManager.getStatusString();
+        uint16_t statusColor = _wifiManager.isConnected() ? GREEN : RED;
+        _display.drawText(10, 76, statusStr.c_str(), statusColor, 2);
+
+        _display.drawText(10, 116, "Web Dashboard:", YELLOW, 2);
+        if (_wifiManager.isConnected()) {
+            String url = "http://" + _wifiManager.ipAddress();
+            uint8_t urlSize = (url.length() <= 28) ? 2 : 1;
+            _display.drawText(10, 146, url.c_str(), CYAN, urlSize);
+
+            _display.drawText(10, 196, "Open in phone browser", WHITE, 1);
+            _display.drawText(10, 214, "to control display", WHITE, 1);
+        } else {
+            _display.drawText(10, 146, "Waiting for Wi-Fi...", RGB565(100, 100, 100), 1);
+            _display.drawText(10, 196, "Web address will appear", WHITE, 1);
+            _display.drawText(10, 214, "once connected", WHITE, 1);
+        }
+    } else {
+        // Wi-Fi Section
+        _display.drawText(10, 50, "Wi-Fi Status:", YELLOW, 2);
+        
+        String statusStr = _wifiManager.getStatusString();
+        uint16_t statusColor = _wifiManager.isConnected() ? GREEN : RED;
+        _display.drawText(10, 80, statusStr.c_str(), statusColor, 2);
+
+        // Web Dashboard section - the URL to open in a browser
+        _display.drawText(10, 130, "Web Dashboard:", YELLOW, 2);
+
+        if (_wifiManager.isConnected()) {
+            String url = "http://" + _wifiManager.ipAddress();
+            // Use big text only when it fits (max ~19 chars at size 2), else fall back
+            uint8_t urlSize = (url.length() <= 19) ? 2 : 1;
+            _display.drawCenteredTextAt(165, url.c_str(), CYAN, urlSize);
+
+            _display.drawText(10, 205, "Open in phone browser", WHITE, 1);
+            _display.drawText(10, 222, "to control display", WHITE, 1);
+        } else {
+            _display.drawCenteredTextAt(165, "Waiting for Wi-Fi...", RGB565(100, 100, 100), 1);
+            _display.drawText(10, 205, "Web address will appear", WHITE, 1);
+            _display.drawText(10, 222, "once connected", WHITE, 1);
+        }
     }
 }
 
 void App::drawClockScreen() {
     _display.fillScreen(BLACK);
     
-    // Draw Large Pixelated Heart centered above time (scale 4 = 32x28px)
-    uint16_t heartColor = Display::hexToRGB565(_settings.getHeartColor());
-    int16_t heartX = (Config::DISPLAY_WIDTH - (8 * 4)) / 2;
-    _display.drawPixelHeart(heartX, 20, heartColor, 4);
+    const int16_t dispW = _display.width();
+    const int16_t dispH = _display.height();
+    const bool landscape = dispW > dispH;
 
+    uint16_t heartColor = Display::hexToRGB565(_settings.getHeartColor());
     String timeStr = _timeManager.getFormattedTime();
     String dateStr = _timeManager.getFormattedDate();
+    String customText = _settings.getClockText();
+
+    if (landscape) {
+        // Landscape (320x240): heart on the left, big time right-aligned, date
+        // tucked under it, custom text bottom center. Uses the wide axis
+        // instead of squeezing a 320px-tall portrait stack into 240px.
+        _display.drawPixelHeart(40, (dispH - 35) / 2, heartColor, 5); // scale 5 = 40x35px
+
+        uint8_t timeSize = 4;
+        int16_t timeW = _display.measureText(timeStr.c_str(), timeSize);
+        int16_t timeX = dispW - timeW - 24;
+        int16_t timeY = (dispH - (int16_t)(16 * timeSize)) / 2;
+        _display.drawText(timeX, timeY, timeStr.c_str(), CYAN, timeSize);
+
+        // Date centered under the time
+        int16_t dateW = _display.measureText(dateStr.c_str(), 2);
+        int16_t dateX = timeX + (timeW - dateW) / 2;
+        _display.drawText(dateX, timeY + 16 * timeSize + 10, dateStr.c_str(), WHITE, 2);
+
+        // Custom text bottom center
+        if (customText.length() > 0) {
+            int16_t cw = _display.measureText(customText.c_str(), 2);
+            _display.drawText((dispW - cw) / 2, dispH - 44, customText.c_str(), YELLOW, 2);
+        }
+        return;
+    }
+
+    // --- Portrait (240x320): heart above time, date + custom text below ---
+    // Draw Large Pixelated Heart centered above time (scale 4 = 32x28px)
+    int16_t heartX = (dispW - (8 * 4)) / 2;
+    _display.drawPixelHeart(heartX, 20, heartColor, 4);
 
     // Large time centered
     _display.drawCenteredText(timeStr.c_str(), CYAN, 4);
 
     // Date below time
-    int16_t dateY = (Config::DISPLAY_HEIGHT / 2) + 40;
+    int16_t dateY = (dispH / 2) + 40;
     
-    // Draw directly to center bottom half
-    int16_t dateWidth = dateStr.length() * 12;
-    int16_t dateX = (Config::DISPLAY_WIDTH - dateWidth) / 2;
+    // Draw directly to center bottom half (pixel-measured, UTF-8 aware)
+    int16_t dateWidth = _display.measureText(dateStr.c_str(), 2);
+    int16_t dateX = (dispW - dateWidth) / 2;
     _display.drawText(dateX, dateY, dateStr.c_str(), WHITE, 2);
 
     // Custom Text below date
-    String customText = _settings.getClockText();
     if (customText.length() > 0) {
-        int16_t textWidth = customText.length() * 12;
-        int16_t textX = (Config::DISPLAY_WIDTH - textWidth) / 2;
-        _display.drawText(textX, dateY + 30, customText.c_str(), YELLOW, 2);
+        int16_t textWidth = _display.measureText(customText.c_str(), 2);
+        int16_t textX = (dispW - textWidth) / 2;
+        // +36: date glyphs are 32px tall at size 2 (8x16 unifont scaled x2)
+        _display.drawText(textX, dateY + 36, customText.c_str(), YELLOW, 2);
     }
 }
 
@@ -220,6 +292,30 @@ void App::update() {
     uint32_t now = millis();
 
     uint8_t displayMode = _settings.getDisplayMode();
+
+    // Orientation change (via web UI): apply immediately and force a redraw of
+    // the active screen so it re-lays out for the new dimensions.
+    uint8_t rotation = _settings.getRotation();
+    if (rotation != _lastRotation) {
+        _display.setRotation(rotation);
+        _lastRotation = rotation;
+        LOG_INFO(TAG, ("Display rotation changed to: " + String(rotation)).c_str());
+        if (displayMode == 1) {
+            _mediaManager.reset();
+        } else if (displayMode == 2) {
+            _lastLyricLine = "";
+            _lastLyricProgress = 255;
+            _lastLyricActive = false;
+            _lastPhoneConnected = false;
+            _lastLyricTitle = "";
+        } else {
+            _wasTimeSynced = false;
+            _lastClockUpdate = 0;
+            if (!_timeManager.isTimeSynced()) {
+                drawDefaultScreen();
+            }
+        }
+    }
 
     if (displayMode != _lastDisplayMode) {
         if (displayMode == 1) {

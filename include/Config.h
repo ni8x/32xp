@@ -7,10 +7,14 @@ namespace Config {
     constexpr char APP_NAME[] = "ESP32-S3 Dashboard";
     constexpr char FIRMWARE_VERSION[] = "0.2.2";
 
-    // Display Constants
+    // Display Constants (native panel resolution, portrait orientation)
     constexpr uint16_t DISPLAY_WIDTH = 240;
     constexpr uint16_t DISPLAY_HEIGHT = 320;
     constexpr uint8_t DEFAULT_ROTATION = 0;
+
+    // Largest panel dimension (320): safe size for scanline buffers that must
+    // work in both portrait (240 wide) and landscape (320 wide) orientations.
+    constexpr uint16_t MAX_DISPLAY_DIM = 320;
 
     // Display GPIOs (Waveshare ESP32-S3-LCD-2 with ST7789T3)
     constexpr int8_t TFT_SCLK = 39;

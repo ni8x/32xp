@@ -87,6 +87,14 @@ const char index_html[] PROGMEM = R"rawliteral(
 
     <div class="card">
       <h2>Display Settings</h2>
+      <label>Orientation</label>
+      <select id="rotation" onchange="postData('/api/orientation', 'rotation=' + this.value)">
+        <option value="0">Portrait</option>
+        <option value="1">Landscape</option>
+        <option value="2">Portrait (flipped)</option>
+        <option value="3">Landscape (flipped)</option>
+      </select>
+      <p style="color: #888; font-size: 0.85em; margin-top: 0;">Applies instantly; the active screen re-lays out for the new dimensions.</p>
       <label>Brightness: <span id="brightVal"></span>%</label>
       <input type="range" id="brightness" min="0" max="255" oninput="document.getElementById('brightVal').innerText = Math.round(this.value/255*100)">
       <button onclick="postData('/api/brightness', 'brightness=' + document.getElementById('brightness').value)">Apply</button>
@@ -166,6 +174,9 @@ const char index_html[] PROGMEM = R"rawliteral(
         }
         if (document.activeElement !== document.getElementById('displayMode') && data.displayMode !== undefined) {
           document.getElementById('displayMode').value = data.displayMode;
+        }
+        if (document.activeElement !== document.getElementById('rotation') && data.rotation !== undefined) {
+          document.getElementById('rotation').value = data.rotation;
         }
         if (document.activeElement !== document.getElementById('ssInterval') && data.ssInterval !== undefined) {
           document.getElementById('ssInterval').value = data.ssInterval;
@@ -269,6 +280,7 @@ String WebServer::buildStatusJson() {
     doc["lat"] = _settings.getLatitude();
     doc["lon"] = _settings.getLongitude();
     doc["displayMode"] = _settings.getDisplayMode();
+    doc["rotation"] = _settings.getRotation();
     doc["ssInterval"] = _settings.getSlideshowInterval();
 
     JsonObject lyrics = doc["lyrics"].to<JsonObject>();
@@ -433,6 +445,15 @@ void WebServer::setupRoutes() {
             uint8_t b = request->getParam("brightness", true)->value().toInt();
             _settings.setBrightness(b);
             LOG_INFO(TAG, "Settings saved: Brightness");
+        }
+        request->send(200, "text/plain", "OK");
+    });
+
+    _server.on("/api/orientation", HTTP_POST, [this](AsyncWebServerRequest *request){
+        if (request->hasParam("rotation", true)) {
+            uint8_t rot = request->getParam("rotation", true)->value().toInt();
+            _settings.setRotation(rot);
+            LOG_INFO(TAG, "Settings saved: Orientation");
         }
         request->send(200, "text/plain", "OK");
     });

@@ -30,6 +30,7 @@ private:
     bool _wasWifiConnected;
     bool _wasTimeSynced;
     uint8_t _lastDisplayMode;
+    uint8_t _lastRotation;
     uint32_t _lastClockUpdate;
     String _lastLyricLine;
     uint8_t _lastLyricProgress;

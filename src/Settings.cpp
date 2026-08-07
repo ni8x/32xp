@@ -13,6 +13,7 @@ Settings::Settings()
       _longitude(DEFAULT_LONGITUDE),
       _heartColor(DEFAULT_HEART_COLOR),
       _displayMode(0),
+      _rotation(Config::DEFAULT_ROTATION),
       _slideshowInterval(5),
       _initialized(false) {
 }
@@ -40,6 +41,8 @@ void Settings::init() {
     _longitude = _preferences.getString("lon", DEFAULT_LONGITUDE);
     _heartColor = _preferences.getString("heartColor", DEFAULT_HEART_COLOR);
     _displayMode = _preferences.getUChar("mode", 0);
+    _rotation = _preferences.getUChar("rotation", Config::DEFAULT_ROTATION);
+    if (_rotation > 3) _rotation = 3;
     _slideshowInterval = _preferences.getUInt("ss_interval", 5);
     
     LOG_INFO(TAG, "Settings initialized");
@@ -122,6 +125,18 @@ void Settings::setDisplayMode(uint8_t mode) {
     }
 }
 
+uint8_t Settings::getRotation() {
+    return _rotation;
+}
+
+void Settings::setRotation(uint8_t rotation) {
+    if (rotation > 3) rotation = 3;
+    _rotation = rotation;
+    if (_initialized) {
+        _preferences.putUChar("rotation", _rotation);
+    }
+}
+
 uint32_t Settings::getSlideshowInterval() {
     return _slideshowInterval;
 }
@@ -155,6 +170,7 @@ void Settings::clearAll() {
         _longitude = DEFAULT_LONGITUDE;
         _heartColor = DEFAULT_HEART_COLOR;
         _displayMode = 0;
+        _rotation = Config::DEFAULT_ROTATION;
         _slideshowInterval = 5;
         LOG_INFO(TAG, "All settings cleared");
     }

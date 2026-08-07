@@ -31,6 +31,9 @@ public:
     uint8_t getDisplayMode();
     void setDisplayMode(uint8_t mode);
 
+    uint8_t getRotation();
+    void setRotation(uint8_t rotation);
+
     uint32_t getSlideshowInterval();
     void setSlideshowInterval(uint32_t seconds);
 
@@ -54,6 +57,7 @@ private:
     String _longitude;
     String _heartColor;
     uint8_t _displayMode;
+    uint8_t _rotation;
     uint32_t _slideshowInterval;
     bool _initialized;
 };

@@ -175,7 +175,7 @@ void MediaManager::update() {
                 lastCheck = millis();
                 _display.fillScreen(BLACK);
                 _display.drawCenteredText("No Media Files", WHITE, 2);
-                _display.drawText(20, Config::DISPLAY_HEIGHT / 2 + 30, "Upload via Dashboard", YELLOW, 1);
+                _display.drawText(20, _display.height() / 2 + 30, "Upload via Dashboard", YELLOW, 1);
             }
             return;
         }
@@ -256,16 +256,21 @@ void MediaManager::renderJpeg(const String& path) {
     uint16_t w = 0, h = 0;
     TJpgDec.getFsJpgSize(&w, &h, path.c_str(), LittleFS);
 
+    // Use the live display size so scaling/centering follow the current
+    // orientation (240x320 portrait or 320x240 landscape).
+    int16_t dispW = _display.width();
+    int16_t dispH = _display.height();
+
     uint8_t scale = 1;
-    if (w > Config::DISPLAY_WIDTH * 4 || h > Config::DISPLAY_HEIGHT * 4) scale = 8;
-    else if (w > Config::DISPLAY_WIDTH * 2 || h > Config::DISPLAY_HEIGHT * 2) scale = 4;
-    else if (w > Config::DISPLAY_WIDTH || h > Config::DISPLAY_HEIGHT) scale = 2;
+    if (w > dispW * 4 || h > dispH * 4) scale = 8;
+    else if (w > dispW * 2 || h > dispH * 2) scale = 4;
+    else if (w > dispW || h > dispH) scale = 2;
     TJpgDec.setJpgScale(scale);
 
     uint16_t scaledW = w / scale;
     uint16_t scaledH = h / scale;
-    int16_t x = (scaledW < Config::DISPLAY_WIDTH) ? (Config::DISPLAY_WIDTH - scaledW) / 2 : 0;
-    int16_t y = (scaledH < Config::DISPLAY_HEIGHT) ? (Config::DISPLAY_HEIGHT - scaledH) / 2 : 0;
+    int16_t x = (scaledW < dispW) ? (dispW - scaledW) / 2 : 0;
+    int16_t y = (scaledH < dispH) ? (dispH - scaledH) / 2 : 0;
     TJpgDec.drawFsJpg(x, y, path.c_str(), LittleFS);
 }
 
@@ -280,8 +285,11 @@ void MediaManager::renderPng(const String& path) {
 
     _pngCanvasW = _png.getWidth();
     _pngCanvasH = _png.getHeight();
-    if (_pngCanvasW > Config::DISPLAY_WIDTH || _pngCanvasH > Config::DISPLAY_HEIGHT) {
-        LOG_ERROR(TAG, "PNG exceeds display size; use a PNG no larger than 240x320");
+    int16_t dispW = _display.width();
+    int16_t dispH = _display.height();
+    if (_pngCanvasW > dispW || _pngCanvasH > dispH) {
+        LOG_ERROR(TAG, ("PNG exceeds display size; use a PNG no larger than " +
+                         String(dispW) + "x" + String(dispH)).c_str());
         _png.close();
         activePng = nullptr;
         return;
@@ -302,12 +310,12 @@ void MediaManager::startGif(const String& path) {
         // Store full canvas dimensions ONCE for use in the draw callback
         _gifCanvasW = _gif.getCanvasWidth();
         _gifCanvasH = _gif.getCanvasHeight();
-        _gifScale = min((float)Config::DISPLAY_WIDTH / _gifCanvasW,
-                        (float)Config::DISPLAY_HEIGHT / _gifCanvasH);
+        _gifScale = min((float)_display.width() / _gifCanvasW,
+                        (float)_display.height() / _gifCanvasH);
         int scaledW = (int)(_gifCanvasW * _gifScale + 0.5f);
         int scaledH = (int)(_gifCanvasH * _gifScale + 0.5f);
-        _gifOffsetX = (Config::DISPLAY_WIDTH - scaledW) / 2;
-        _gifOffsetY = (Config::DISPLAY_HEIGHT - scaledH) / 2;
+        _gifOffsetX = (_display.width() - scaledW) / 2;
+        _gifOffsetY = (_display.height() - scaledH) / 2;
         _nextGifFrameTime = 0;
         _gifStartedAt = millis();
         _gifDecodeErrors = 0;
@@ -345,8 +353,9 @@ void MediaManager::gifDrawCallback(GIFDRAW* pDraw) {
     // destination pixel. Draw opaque runs as scanlines instead of issuing one
     // SPI transaction per pixel; this keeps animated 450x450 GIFs responsive.
     if (_gifScale <= 1.0f) {
-        if (dstY1 <= dstY0 || dstY0 < 0 || dstY0 >= Config::DISPLAY_HEIGHT) return;
-        static uint16_t line[Config::DISPLAY_WIDTH];
+        if (dstY1 <= dstY0 || dstY0 < 0 || dstY0 >= activeDisplay->height()) return;
+        // Sized for the widest possible row in either orientation.
+        static uint16_t line[Config::MAX_DISPLAY_DIM];
         int runStart = -1;
         int runLength = 0;
 
@@ -364,7 +373,7 @@ void MediaManager::gifDrawCallback(GIFDRAW* pDraw) {
             int srcX = x + i;
             int dstX0 = _gifOffsetX + (int)(srcX * _gifScale);
             int dstX1 = _gifOffsetX + (int)((srcX + 1) * _gifScale);
-            if (dstX1 <= dstX0 || dstX0 < 0 || dstX0 >= Config::DISPLAY_WIDTH ||
+            if (dstX1 <= dstX0 || dstX0 < 0 || dstX0 >= activeDisplay->width() ||
                 (pDraw->ucHasTransparency && pixel == pDraw->ucTransparent)) {
                 flushRun();
                 continue;
@@ -390,13 +399,13 @@ void MediaManager::gifDrawCallback(GIFDRAW* pDraw) {
         int srcX = x + i;
         int dstX0 = _gifOffsetX + (int)(srcX * _gifScale);
         int dstX1 = _gifOffsetX + (int)((srcX + 1) * _gifScale);
-        if (dstX0 >= Config::DISPLAY_WIDTH || dstX1 <= 0 ||
-            dstY0 >= Config::DISPLAY_HEIGHT || dstY1 <= 0) continue;
+        if (dstX0 >= activeDisplay->width() || dstX1 <= 0 ||
+            dstY0 >= activeDisplay->height() || dstY1 <= 0) continue;
 
         int drawX = max(0, dstX0);
         int drawY = max(0, dstY0);
-        int drawW = min((int)Config::DISPLAY_WIDTH, dstX1) - drawX;
-        int drawH = min((int)Config::DISPLAY_HEIGHT, dstY1) - drawY;
+        int drawW = min((int)activeDisplay->width(), dstX1) - drawX;
+        int drawH = min((int)activeDisplay->height(), dstY1) - drawY;
         if (drawW > 0 && drawH > 0) {
             activeDisplay->getGFX()->fillRect(drawX, drawY, drawW, drawH, usPalette[pixel]);
         }
@@ -436,11 +445,12 @@ int32_t MediaManager::gifSeekCallback(GIFFILE* pFile, int32_t iPosition) {
 }
 
 int MediaManager::pngDrawCallback(PNGDRAW* pDraw) {
-    if (!activeDisplay || !activeDisplay->getGFX() || !activePng || pDraw->iWidth > Config::DISPLAY_WIDTH) return 0;
+    if (!activeDisplay || !activeDisplay->getGFX() || !activePng || pDraw->iWidth > activeDisplay->width()) return 0;
 
-    static uint16_t line[Config::DISPLAY_WIDTH];
-    int x = (Config::DISPLAY_WIDTH - _pngCanvasW) / 2;
-    int y = (Config::DISPLAY_HEIGHT - _pngCanvasH) / 2 + pDraw->y;
+    // Sized for the widest possible row in either orientation.
+    static uint16_t line[Config::MAX_DISPLAY_DIM];
+    int x = (activeDisplay->width() - _pngCanvasW) / 2;
+    int y = (activeDisplay->height() - _pngCanvasH) / 2 + pDraw->y;
     activePng->getLineAsRGB565(pDraw, line, PNG_RGB565_LITTLE_ENDIAN, 0x00000000);
     activeDisplay->getGFX()->draw16bitRGBBitmap(x, y, line, pDraw->iWidth, 1);
     return 1;
