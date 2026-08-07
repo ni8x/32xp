@@ -15,6 +15,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import kotlinx.coroutines.runBlocking
 
 class MainActivity : AppCompatActivity() {
 
@@ -24,6 +25,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statusText: TextView
     private lateinit var songText: TextView
     private lateinit var lyricText: TextView
+    private lateinit var testTextInput: EditText
+    private lateinit var sendTestTextButton: Button
 
     private var isRunning = false
 
@@ -58,10 +61,12 @@ class MainActivity : AppCompatActivity() {
         statusText = findViewById(R.id.statusText)
         songText = findViewById(R.id.songText)
         lyricText = findViewById(R.id.lyricText)
+        testTextInput = findViewById(R.id.testTextInput)
+        sendTestTextButton = findViewById(R.id.sendTestTextButton)
 
-        // Load saved IP
+        // Load saved IP (normalize in case a slashed value was saved before)
         val prefs = getSharedPreferences("config", MODE_PRIVATE)
-        ipInput.setText(prefs.getString("esp32_ip", "192.168."))
+        ipInput.setText(Esp32Client.normalizeIp(prefs.getString("esp32_ip", "192.168.")))
 
         val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             RECEIVER_NOT_EXPORTED
@@ -75,6 +80,10 @@ class MainActivity : AppCompatActivity() {
             testConnection()
         }
 
+        sendTestTextButton.setOnClickListener {
+            sendTestText()
+        }
+
         toggleButton.setOnClickListener {
             if (isRunning) {
                 stopService()
@@ -86,8 +95,10 @@ class MainActivity : AppCompatActivity() {
         checkPermissions()
     }
 
+    private fun enteredIp(): String = Esp32Client.normalizeIp(ipInput.text.toString())
+
     private fun testConnection() {
-        val ip = ipInput.text.toString().trim()
+        val ip = enteredIp()
         if (ip.isEmpty()) {
             Toast.makeText(this, "Enter ESP32 IP address", Toast.LENGTH_SHORT).show()
             return
@@ -105,16 +116,13 @@ class MainActivity : AppCompatActivity() {
                 conn.readTimeout = 3000
                 val code = conn.responseCode
 
-                // Also send ping to register phone as connected
+                // Also send ping to register phone as connected (no body needed)
                 try {
                     val pingUrl = java.net.URL("http://$ip/api/lyrics/ping")
                     val pingConn = pingUrl.openConnection() as java.net.HttpURLConnection
                     pingConn.requestMethod = "POST"
-                    pingConn.doOutput = true
                     pingConn.connectTimeout = 2000
                     pingConn.readTimeout = 2000
-                    pingConn.outputStream.write("connected=true".toByteArray())
-                    pingConn.outputStream.close()
                     pingConn.responseCode
                 } catch (_: Exception) {}
 
@@ -146,6 +154,30 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
+    private fun sendTestText() {
+        val ip = enteredIp()
+        val message = testTextInput.text.toString().trim()
+        if (ip.isEmpty() || message.isEmpty()) {
+            Toast.makeText(this, "Enter IP and test text", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        Thread {
+            try {
+                val result = runBlocking { Esp32Client(ip).sendLine(message) }
+                runOnUiThread {
+                    statusText.text = if (result.isSuccess) {
+                        "Test text sent to ESP32"
+                    } else {
+                        "Test text failed: ${result.exceptionOrNull()?.message}"
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread { statusText.text = "Test text failed: ${e.message}" }
+            }
+        }.start()
+    }
+
     private fun checkPermissions() {
         // Notification permission (Android 13+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -172,7 +204,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startService() {
-        val ip = ipInput.text.toString().trim()
+        val ip = enteredIp()
         if (ip.isEmpty()) {
             Toast.makeText(this, "Enter ESP32 IP address", Toast.LENGTH_SHORT).show()
             return
