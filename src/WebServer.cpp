@@ -108,6 +108,13 @@ const char index_html[] PROGMEM = R"rawliteral(
 
     <div class="card">
       <h2>Display Settings</h2>
+      <label>Theme</label>
+      <select id="theme" onchange="postData('/api/theme', 'theme=' + this.value)">
+        <option value="default">Default</option>
+        <option value="pikachu">Pikachu</option>
+        <option value="cyberpunk">Cyberpunk</option>
+      </select>
+      <p style="color: #888; font-size: 0.85em; margin-top: 0;">Preset color scheme. Selecting a theme resets the lyric &amp; heart colors to its palette &mdash; you can still customize them below.</p>
       <label>Orientation</label>
       <select id="rotation" onchange="postData('/api/orientation', 'rotation=' + this.value)">
         <option value="0">Portrait</option>
@@ -210,6 +217,9 @@ const char index_html[] PROGMEM = R"rawliteral(
         }
         if (document.activeElement !== document.getElementById('displayMode') && data.displayMode !== undefined) {
           document.getElementById('displayMode').value = data.displayMode;
+        }
+        if (document.activeElement !== document.getElementById('theme') && data.theme !== undefined) {
+          document.getElementById('theme').value = data.theme;
         }
         if (document.activeElement !== document.getElementById('rotation') && data.rotation !== undefined) {
           document.getElementById('rotation').value = data.rotation;
@@ -330,6 +340,7 @@ String WebServer::buildStatusJson() {
     doc["wifiStatus"] = _wifiManager.isConnected() ? "Connected" : "Disconnected";
     doc["ip"] = _wifiManager.ipAddress();
     doc["clockText"] = _settings.getClockText();
+    doc["theme"] = _settings.getTheme();
     doc["heartColor"] = _settings.getHeartColor();
     doc["lyricColor"] = _settings.getLyricColor();
     doc["lyricGlow"] = _settings.getLyricGlow();
@@ -396,6 +407,15 @@ void WebServer::setupRoutes() {
             request->send(200, "text/plain", "OK");
         });
     _server.addHandler(lyricsJsonHandler);
+
+    _server.on("/api/theme", HTTP_POST, [this](AsyncWebServerRequest *request){
+        if (request->hasParam("theme", true)) {
+            String theme = request->getParam("theme", true)->value();
+            _settings.setTheme(theme);
+            LOG_INFO(TAG, ("Theme saved: " + theme).c_str());
+        }
+        request->send(200, "text/plain", "OK");
+    });
 
     _server.on("/api/heartcolor", HTTP_POST, [this](AsyncWebServerRequest *request){
         if (request->hasParam("color", true)) {

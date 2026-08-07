@@ -37,6 +37,27 @@ public:
     uint32_t getSlideshowInterval();
     void setSlideshowInterval(uint32_t seconds);
 
+    // A named preset look. Selecting a theme seeds the lyric & heart colors to
+    // its palette; every individual customization (web UI) still works on top.
+    String getTheme();
+    void setTheme(const String& theme);
+
+    // Palette for the current theme. All entries are #RRGGBB strings so callers
+    // convert with Display::hexToRGB565(). Returns nullptr for unknown names.
+    struct ThemePalette {
+        const char* name;
+        const char* lyricHex;  // default lyric text color
+        const char* heartHex;  // default pixel-heart color
+        const char* accentHex; // headers / section labels
+        const char* timeHex;   // clock digits
+        const char* dimHex;    // secondary text (prev/next lines, idle hints)
+        const char* lineHex;   // separator lines
+        const char* okHex;     // connected status / active dot
+        const char* warnHex;   // waiting / muted hints
+        const char* urlHex;    // web dashboard URL
+    };
+    static const ThemePalette* getThemePalette(const String& name);
+
     String getHeartColor();
     void setHeartColor(const String& hex);
 
@@ -69,6 +90,7 @@ private:
     String _clockText;
     String _latitude;
     String _longitude;
+    String _theme;
     String _heartColor;
     String _lyricColor;
     bool _lyricGlow;

@@ -31,6 +31,7 @@ private:
     bool _wasTimeSynced;
     uint8_t _lastDisplayMode;
     uint8_t _lastRotation;
+    String _lastTheme;
     uint32_t _lastClockUpdate;
     String _lastLyricLine;
     String _lastLyricColor;

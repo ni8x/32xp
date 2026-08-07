@@ -4,6 +4,25 @@
 
 static const char* TAG = "Settings";
 
+// Built-in themes. "default" mirrors the classic hardcoded look; the others
+// restyle the chrome (headers, labels, clock, status colors) and seed the
+// lyric/heart color pickers when selected.
+static const Settings::ThemePalette THEMES[] = {
+    // name       lyric     heart     accent    time      dim       line      ok        warn      url
+    {"default",   "#00ffff", "#00d2ff", "#ffd700", "#00ffff", "#3c3c3c", "#404040", "#00ff00", "#646464", "#00ffff"},
+    {"pikachu",  "#ffde00", "#ffb400", "#ffde00", "#ffe74c", "#4a432b", "#7a6a1e", "#a8d84f", "#8a7f4d", "#ffe74c"},
+    {"cyberpunk", "#05d9e8", "#ff2a6d", "#ff2a6d", "#05d9e8", "#3d3a5c", "#522557", "#39ff14", "#6f6a8f", "#05d9e8"},
+};
+
+const Settings::ThemePalette* Settings::getThemePalette(const String& name) {
+    for (size_t i = 0; i < sizeof(THEMES) / sizeof(THEMES[0]); i++) {
+        if (name == THEMES[i].name) {
+            return &THEMES[i];
+        }
+    }
+    return nullptr;
+}
+
 Settings::Settings()
     : _brightness(Config::DEFAULT_BRIGHTNESS),
       _wifiSSID(),
@@ -11,6 +30,7 @@ Settings::Settings()
       _clockText(),
       _latitude(DEFAULT_LATITUDE),
       _longitude(DEFAULT_LONGITUDE),
+      _theme("default"),
       _heartColor(DEFAULT_HEART_COLOR),
       _lyricColor(DEFAULT_LYRIC_COLOR),
       _lyricGlow(false),
@@ -43,6 +63,10 @@ void Settings::init() {
     _clockText = _preferences.getString("clockText", "");
     _latitude = _preferences.getString("lat", DEFAULT_LATITUDE);
     _longitude = _preferences.getString("lon", DEFAULT_LONGITUDE);
+    // Clamp to a known theme; an unknown stored value falls back to default
+    // without touching the colors (only an explicit /api/theme change does).
+    String storedTheme = _preferences.getString("theme", "default");
+    _theme = getThemePalette(storedTheme) ? storedTheme : "default";
     _heartColor = _preferences.getString("heartColor", DEFAULT_HEART_COLOR);
     _lyricColor = _preferences.getString("lyricColor", DEFAULT_LYRIC_COLOR);
     _lyricGlow = _preferences.getBool("lyricGlow", false);
@@ -156,6 +180,27 @@ void Settings::setSlideshowInterval(uint32_t seconds) {
     }
 }
 
+String Settings::getTheme() {
+    return _theme;
+}
+
+void Settings::setTheme(const String& theme) {
+    const ThemePalette* palette = getThemePalette(theme);
+    if (!palette) {
+        LOG_WARN(TAG, ("Ignoring unknown theme: " + theme).c_str());
+        return;
+    }
+    _theme = theme;
+    if (_initialized) {
+        _preferences.putString("theme", _theme);
+    }
+    // A theme is a preset look: seed the customizable colors to its palette.
+    // Anything the user tweaks afterwards (web UI) is kept as-is.
+    setLyricColor(palette->lyricHex);
+    setHeartColor(palette->heartHex);
+    LOG_INFO(TAG, ("Theme applied: " + theme).c_str());
+}
+
 String Settings::getHeartColor() {
     return _heartColor;
 }
@@ -220,6 +265,7 @@ void Settings::clearAll() {
         _clockText = "";
         _latitude = DEFAULT_LATITUDE;
         _longitude = DEFAULT_LONGITUDE;
+        _theme = "default";
         _heartColor = DEFAULT_HEART_COLOR;
         _lyricColor = DEFAULT_LYRIC_COLOR;
         _lyricGlow = false;

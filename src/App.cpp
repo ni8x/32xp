@@ -23,6 +23,7 @@ App::App()
       _wasTimeSynced(false),
       _lastDisplayMode(255),
       _lastRotation(255),
+      _lastTheme("default"),
       _lastClockUpdate(0),
       _lastLyricLine(""),
       _lastLyricColor(""),
@@ -53,6 +54,7 @@ void App::init() {
     LOG_INFO(TAG, Config::FIRMWARE_VERSION);
 
     _settings.init();
+    _lastTheme = _settings.getTheme();
     _display.init(_settings.getBrightness());
     _display.setRotation(_settings.getRotation());
     _lastRotation = _settings.getRotation();
@@ -113,6 +115,15 @@ void App::drawLyricsScreen() {
     const int16_t dispH = _display.height();
     const bool landscape = dispW > dispH;
     uint16_t lyricColor = Display::hexToRGB565(_settings.getLyricColor());
+
+    // Chrome colors come from the active theme; the lyric color itself stays
+    // user-customizable (and is seeded by the theme when it's selected).
+    const Settings::ThemePalette* palette = Settings::getThemePalette(_settings.getTheme());
+    uint16_t accent = Display::hexToRGB565(palette->accentHex);
+    uint16_t lineColor = Display::hexToRGB565(palette->lineHex);
+    uint16_t dimColor = Display::hexToRGB565(palette->dimHex);
+    uint16_t warnColor = Display::hexToRGB565(palette->warnHex);
+    uint16_t okColor = Display::hexToRGB565(palette->okHex);
 
     // Current-line geometry (shared by the full redraw and the anim tick).
     uint8_t currSize = 1;
@@ -245,8 +256,8 @@ void App::drawLyricsScreen() {
     // height 16 + y-offset -2), so y=2 would clip the top of the text.
     if (!full && header.length() > 0) {
         header = _display.fitText(header, 1, dispW - 20);
-        _display.drawCenteredTextAt(16, header.c_str(), YELLOW, 1);
-        _display.drawLine(10, 20, dispW - 10, 20, RGB565(64, 64, 64));
+        _display.drawCenteredTextAt(16, header.c_str(), accent, 1);
+        _display.drawLine(10, 20, dispW - 10, 20, lineColor);
     }
 
     if (current.length() > 0) {
@@ -255,12 +266,12 @@ void App::drawLyricsScreen() {
             String prev = _lyricsManager.getPrevLine();
             if (prev.length() > 0) {
                 prev = _display.fitText(prev, 1, dispW - 20);
-                _display.drawCenteredTextAt(landscape ? 64 : 110, prev.c_str(), RGB565(60, 60, 60), 1);
+                _display.drawCenteredTextAt(landscape ? 64 : 110, prev.c_str(), dimColor, 1);
             }
             String nxt = _lyricsManager.getNextLine();
             if (nxt.length() > 0) {
                 nxt = _display.fitText(nxt, 1, dispW - 20);
-                _display.drawCenteredTextAt(landscape ? 156 : 210, nxt.c_str(), RGB565(60, 60, 60), 1);
+                _display.drawCenteredTextAt(landscape ? 156 : 210, nxt.c_str(), dimColor, 1);
             }
         }
 
@@ -272,18 +283,18 @@ void App::drawLyricsScreen() {
         _lastCurrW = 0; // nothing to partially redraw
         if (_lyricsManager.isActive()) {
             // Song known but no active line yet
-            _display.drawCenteredTextAt(landscape ? 96 : 150, "Waiting for", RGB565(100, 100, 100), 1);
-            _display.drawCenteredTextAt(landscape ? 114 : 168, "lyrics...", RGB565(100, 100, 100), 1);
+            _display.drawCenteredTextAt(landscape ? 96 : 150, "Waiting for", warnColor, 1);
+            _display.drawCenteredTextAt(landscape ? 114 : 168, "lyrics...", warnColor, 1);
         } else if (_lyricsManager.isPhoneConnected()) {
             // Phone connected but no active lyrics yet
-            _display.drawCenteredTextAt(landscape ? 72 : 140, "Lyrics Mode", RGB565(60, 60, 60), 2);
-            _display.drawCenteredTextAt(landscape ? 116 : 175, "Phone Connected", GREEN, 1);
-            _display.drawCenteredTextAt(landscape ? 134 : 193, "Waiting for lyrics...", RGB565(100, 100, 100), 1);
+            _display.drawCenteredTextAt(landscape ? 72 : 140, "Lyrics Mode", dimColor, 2);
+            _display.drawCenteredTextAt(landscape ? 116 : 175, "Phone Connected", okColor, 1);
+            _display.drawCenteredTextAt(landscape ? 134 : 193, "Waiting for lyrics...", warnColor, 1);
         } else {
             // Idle state - phone not connected
-            _display.drawCenteredTextAt(landscape ? 72 : 140, "Lyrics Mode", RGB565(60, 60, 60), 2);
-            _display.drawCenteredTextAt(landscape ? 116 : 175, "Connect Android app", RGB565(80, 80, 80), 1);
-            _display.drawCenteredTextAt(landscape ? 134 : 193, "to send lyrics", RGB565(80, 80, 80), 1);
+            _display.drawCenteredTextAt(landscape ? 72 : 140, "Lyrics Mode", dimColor, 2);
+            _display.drawCenteredTextAt(landscape ? 116 : 175, "Connect Android app", dimColor, 1);
+            _display.drawCenteredTextAt(landscape ? 134 : 193, "to send lyrics", dimColor, 1);
         }
     }
 
@@ -293,10 +304,8 @@ void App::drawLyricsScreen() {
     }
 
     // Active indicator dot (hidden in full-screen style)
-
-    // Active indicator dot (hidden in full-screen style)
     if (!full && _lyricsManager.isActive()) {
-        _display.drawCircle(dispW - 8, dispH - 8, 3, GREEN);
+        _display.drawCircle(dispW - 8, dispH - 8, 3, okColor);
     }
 }
 
@@ -306,17 +315,23 @@ void App::drawDefaultScreen() {
     const int16_t dispW = _display.width();
     const bool landscape = dispW > _display.height();
 
+    const Settings::ThemePalette* palette = Settings::getThemePalette(_settings.getTheme());
+    uint16_t accent = Display::hexToRGB565(palette->accentHex);
+    uint16_t okColor = Display::hexToRGB565(palette->okHex);
+    uint16_t warnColor = Display::hexToRGB565(palette->warnHex);
+    uint16_t urlColor = Display::hexToRGB565(palette->urlHex);
+
     // Header
     if (landscape) {
         // Top-anchor the title in landscape: drawCenteredText would vertically
         // center it in the short 240px frame and collide with the content.
         // y=30 not 6: unifont ink renders 14*size px ABOVE the given y, so a
         // small y clips the top of the text off-screen.
-        _display.drawCenteredTextAt(30, "DEVICE DASHBOARD", WHITE, 2);
-        _display.drawLine(10, 40, dispW - 10, 40, GREEN);
+        _display.drawCenteredTextAt(30, "DEVICE DASHBOARD", accent, 2);
+        _display.drawLine(10, 40, dispW - 10, 40, okColor);
     } else {
-        _display.drawCenteredText("DEVICE DASHBOARD", WHITE, 2);
-        _display.drawLine(10, 30, dispW - 10, 30, GREEN);
+        _display.drawCenteredText("DEVICE DASHBOARD", accent, 2);
+        _display.drawLine(10, 30, dispW - 10, 30, okColor);
     }
 
     if (landscape) {
@@ -324,45 +339,45 @@ void App::drawDefaultScreen() {
         // less vertical room, but the URL still fits at size 2 on the wide axis.
         // Y values already account for unifont's ink rendering 14*size px above
         // the given y (e.g. size-2 text at y=70 occupies rows 42..73).
-        _display.drawText(10, 70, "Wi-Fi Status:", YELLOW, 2);
+        _display.drawText(10, 70, "Wi-Fi Status:", accent, 2);
         String statusStr = _wifiManager.getStatusString();
-        uint16_t statusColor = _wifiManager.isConnected() ? GREEN : RED;
+        uint16_t statusColor = _wifiManager.isConnected() ? okColor : RED;
         _display.drawText(10, 100, statusStr.c_str(), statusColor, 2);
 
-        _display.drawText(10, 140, "Web Dashboard:", YELLOW, 2);
+        _display.drawText(10, 140, "Web Dashboard:", accent, 2);
         if (_wifiManager.isConnected()) {
             String url = "http://" + _wifiManager.ipAddress();
             uint8_t urlSize = (url.length() <= 28) ? 2 : 1;
-            _display.drawText(10, 170, url.c_str(), CYAN, urlSize);
+            _display.drawText(10, 170, url.c_str(), urlColor, urlSize);
 
             _display.drawText(10, 196, "Open in phone browser", WHITE, 1);
             _display.drawText(10, 214, "to control display", WHITE, 1);
         } else {
-            _display.drawText(10, 170, "Waiting for Wi-Fi...", RGB565(100, 100, 100), 1);
+            _display.drawText(10, 170, "Waiting for Wi-Fi...", warnColor, 1);
             _display.drawText(10, 196, "Web address will appear", WHITE, 1);
             _display.drawText(10, 214, "once connected", WHITE, 1);
         }
     } else {
         // Wi-Fi Section
-        _display.drawText(10, 50, "Wi-Fi Status:", YELLOW, 2);
+        _display.drawText(10, 50, "Wi-Fi Status:", accent, 2);
         
         String statusStr = _wifiManager.getStatusString();
-        uint16_t statusColor = _wifiManager.isConnected() ? GREEN : RED;
+        uint16_t statusColor = _wifiManager.isConnected() ? okColor : RED;
         _display.drawText(10, 80, statusStr.c_str(), statusColor, 2);
 
         // Web Dashboard section - the URL to open in a browser
-        _display.drawText(10, 130, "Web Dashboard:", YELLOW, 2);
+        _display.drawText(10, 130, "Web Dashboard:", accent, 2);
 
         if (_wifiManager.isConnected()) {
             String url = "http://" + _wifiManager.ipAddress();
             // Use big text only when it fits (max ~19 chars at size 2), else fall back
             uint8_t urlSize = (url.length() <= 19) ? 2 : 1;
-            _display.drawCenteredTextAt(165, url.c_str(), CYAN, urlSize);
+            _display.drawCenteredTextAt(165, url.c_str(), urlColor, urlSize);
 
             _display.drawText(10, 205, "Open in phone browser", WHITE, 1);
             _display.drawText(10, 222, "to control display", WHITE, 1);
         } else {
-            _display.drawCenteredTextAt(165, "Waiting for Wi-Fi...", RGB565(100, 100, 100), 1);
+            _display.drawCenteredTextAt(165, "Waiting for Wi-Fi...", warnColor, 1);
             _display.drawText(10, 205, "Web address will appear", WHITE, 1);
             _display.drawText(10, 222, "once connected", WHITE, 1);
         }
@@ -377,6 +392,13 @@ void App::drawClockScreen() {
     const bool landscape = dispW > dispH;
 
     uint16_t heartColor = Display::hexToRGB565(_settings.getHeartColor());
+
+    // Theme colors: time digits + custom-text accent follow the active theme;
+    // the heart stays fully user-customizable (theme-seeded on selection).
+    const Settings::ThemePalette* palette = Settings::getThemePalette(_settings.getTheme());
+    uint16_t timeColor = Display::hexToRGB565(palette->timeHex);
+    uint16_t accent = Display::hexToRGB565(palette->accentHex);
+
     String timeStr = _timeManager.getFormattedTime();
     String dateStr = _timeManager.getFormattedDate();
     String customText = _settings.getClockText();
@@ -391,7 +413,7 @@ void App::drawClockScreen() {
         int16_t timeW = _display.measureText(timeStr.c_str(), timeSize);
         int16_t timeX = dispW - timeW - 24;
         int16_t timeY = (dispH - (int16_t)(16 * timeSize)) / 2;
-        _display.drawText(timeX, timeY, timeStr.c_str(), CYAN, timeSize);
+        _display.drawText(timeX, timeY, timeStr.c_str(), timeColor, timeSize);
 
         // Date centered under the time
         int16_t dateW = _display.measureText(dateStr.c_str(), 2);
@@ -401,7 +423,7 @@ void App::drawClockScreen() {
         // Custom text bottom center
         if (customText.length() > 0) {
             int16_t cw = _display.measureText(customText.c_str(), 2);
-            _display.drawText((dispW - cw) / 2, dispH - 44, customText.c_str(), YELLOW, 2);
+            _display.drawText((dispW - cw) / 2, dispH - 44, customText.c_str(), accent, 2);
         }
         return;
     }
@@ -412,7 +434,7 @@ void App::drawClockScreen() {
     _display.drawPixelHeart(heartX, 20, heartColor, 4);
 
     // Large time centered
-    _display.drawCenteredText(timeStr.c_str(), CYAN, 4);
+    _display.drawCenteredText(timeStr.c_str(), timeColor, 4);
 
     // Date below time
     int16_t dateY = (dispH / 2) + 40;
@@ -427,7 +449,7 @@ void App::drawClockScreen() {
         int16_t textWidth = _display.measureText(customText.c_str(), 2);
         int16_t textX = (dispW - textWidth) / 2;
         // +36: date glyphs are 32px tall at size 2 (8x16 unifont scaled x2)
-        _display.drawText(textX, dateY + 36, customText.c_str(), YELLOW, 2);
+        _display.drawText(textX, dateY + 36, customText.c_str(), accent, 2);
     }
 }
 
@@ -448,6 +470,30 @@ void App::update() {
         _display.setRotation(rotation);
         _lastRotation = rotation;
         LOG_INFO(TAG, ("Display rotation changed to: " + String(rotation)).c_str());
+        if (displayMode == 1) {
+            _mediaManager.reset();
+        } else if (displayMode == 2) {
+            _lastLyricLine = "";
+            _lastLyricProgress = 255;
+            _lastLyricActive = false;
+            _lastPhoneConnected = false;
+            _lastLyricTitle = "";
+        } else {
+            _wasTimeSynced = false;
+            _lastClockUpdate = 0;
+            if (!_timeManager.isTimeSynced()) {
+                drawDefaultScreen();
+            }
+        }
+    }
+
+    // Theme change (via web UI): re-render the active screen with the new
+    // palette right away. The lyric cache also picks up the freshly seeded
+    // lyric color below, but the chrome colors need a forced redraw.
+    String theme = _settings.getTheme();
+    if (theme != _lastTheme) {
+        _lastTheme = theme;
+        LOG_INFO(TAG, ("Theme changed to: " + theme).c_str());
         if (displayMode == 1) {
             _mediaManager.reset();
         } else if (displayMode == 2) {
