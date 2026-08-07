@@ -104,6 +104,7 @@ class LyricsEngine(
             val detectedAt = System.currentTimeMillis()
             var fallbackStart = -1L
             var lastIndex = -1
+            var lastPosSync = 0L
             var waitingShown = false
             var waitingSince = 0L
             var gaveUpWaiting = false
@@ -166,17 +167,17 @@ class LyricsEngine(
                 }
 
                 val currentIndex = findLineIndex(elapsedMs)
+                val totalDuration = lyrics.last().timeMs
+                val progress = if (totalDuration > 0) {
+                    (elapsedMs * 100 / totalDuration).toInt().coerceIn(0, 100)
+                } else 0
 
                 if (currentIndex != lastIndex) {
                     lastIndex = currentIndex
+                    lastPosSync = now
                     val currentLine = lyrics[currentIndex]
                     val prevLine = if (currentIndex > 0) lyrics[currentIndex - 1] else null
                     val nextLine = if (currentIndex < lyrics.size - 1) lyrics[currentIndex + 1] else null
-
-                    val totalDuration = lyrics.last().timeMs
-                    val progress = if (totalDuration > 0) {
-                        (elapsedMs * 100 / totalDuration).toInt().coerceIn(0, 100)
-                    } else 0
 
                     onLyricLine(currentLine.text)
 
@@ -184,7 +185,21 @@ class LyricsEngine(
                         current = currentLine.text,
                         prev = prevLine?.text ?: "",
                         next = nextLine?.text ?: "",
-                        progress = progress
+                        progress = progress,
+                        posSec = (elapsedMs / 1000).toInt(),
+                        durSec = (totalDuration / 1000).toInt()
+                    )
+                } else if (now - lastPosSync >= 10_000 && lastIndex >= 0) {
+                    // Periodic position re-anchor: the ESP32 ticks its own
+                    // elapsed clock between updates, so during pauses or long
+                    // held lines this keeps the on-screen timestamp accurate.
+                    lastPosSync = now
+                    val currentLine = lyrics[lastIndex]
+                    esp32Client.sendLine(
+                        current = currentLine.text,
+                        progress = progress,
+                        posSec = (elapsedMs / 1000).toInt(),
+                        durSec = (totalDuration / 1000).toInt()
                     )
                 }
 

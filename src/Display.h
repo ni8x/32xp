@@ -25,13 +25,16 @@ public:
     void drawPixelHeart(int16_t x, int16_t y, uint16_t color, uint8_t scale = 4);
     void drawCenteredTextAt(int16_t y, const char* text, uint16_t color, uint8_t size = 1);
 
-    // Centered text with optional radiant glow (2-ring dim halo) and/or rainbow
+    // Centered text with optional radiant glow (3-ring dim halo) and/or rainbow
     // hue cycling across glyphs. hueBase (0..255) animates the rainbow. When
     // outX/outW are given, the drawn line's bounding box is returned (the halo
     // is not included) so callers can erase exactly that region between frames.
+    // glowDimOffset adds extra dimming to every halo ring (e.g. 1 = 25% instead
+    // of 50% on the innermost ring) for busy screens where a strong glow blinds.
     void drawCenteredTextEffect(int16_t y, const char* text, uint16_t color, uint8_t size,
                                 bool glow, bool rainbow, uint8_t hueBase,
-                                int16_t* outX = nullptr, int16_t* outW = nullptr);
+                                int16_t* outX = nullptr, int16_t* outW = nullptr,
+                                uint8_t glowDimOffset = 0);
 
     // HSV hue (0..255) -> RGB565 (rainbow wheel)
     static uint16_t hueToRGB565(uint8_t hue);
@@ -39,6 +42,12 @@ public:
     // UTF-8 aware text measurement & fitting (pixel-based, never splits a codepoint)
     uint16_t measureText(const char* text, uint8_t size = 1);
     String fitText(const String& text, uint8_t size, int16_t maxWidth);
+
+    // Small pixel font (ASCII, default 7x13 - very readable) for timestamps /
+    // status readouts. Switches the renderer font for the call and restores
+    // the lyric unifont.
+    void drawPixelText(int16_t x, int16_t y, const char* text, uint16_t color);
+    uint16_t measurePixelText(const char* text);
 
     // Indic (Devanagari/Gurmukhi) shaped rendering: places matras/virama in
     // the correct positions instead of unifont's linear per-codepoint layout.

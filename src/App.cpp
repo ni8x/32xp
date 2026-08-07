@@ -4,6 +4,16 @@
 
 static const char* TAG = "App";
 
+// "m:ss" (e.g. 245 -> "4:05") for the progress-bar timestamps.
+static String fmtTime(uint32_t sec) {
+    uint32_t m = sec / 60;
+    uint32_t s = sec % 60;
+    String r = String(m) + ":";
+    if (s < 10) r += "0";
+    r += String(s);
+    return r;
+}
+
 App::App() 
     : _wifiManager(_settings), 
       _mediaManager(_display, _settings),
@@ -25,6 +35,8 @@ App::App()
       _lastCurrY(0),
       _lastCurrW(0),
       _lastCurrH(0),
+      _lastTsLW(0),
+      _lastTsRW(0),
       _lastLyricActive(false),
       _lastPhoneConnected(false),
       _lastLyricTitle(""),
@@ -76,6 +88,7 @@ void App::drawLyricsScreen() {
         _lyricsManager.getTitle() != _lastLyricTitle;
 
     String current = _lyricsManager.getCurrentLine();
+    const bool full = _settings.getLyricFull();
 
     // Rainbow needs continuous redraws to animate. Glow alone is static, so it
     // never forces periodic redraws (no flicker); and when the rainbow animates,
@@ -85,7 +98,13 @@ void App::drawLyricsScreen() {
     bool rainbow = _settings.getLyricRainbow();
     bool animTick = rainbow && current.length() > 0 && (millis() - _lastLyricDraw >= 90);
 
-    if (!stateChanged && !animTick) {
+    // Timestamps above the progress bar tick once per second (only when a
+    // duration is known). Like the rainbow tick, this refreshes just the two
+    // small readouts instead of the whole screen.
+    bool timeTick = !full && _lyricsManager.isActive() && current.length() > 0 &&
+                    _lyricsManager.getDurationSec() > 0 && (millis() - _lastLyricDraw >= 1000);
+
+    if (!stateChanged && !animTick && !timeTick) {
         return; // No change, skip redraw
     }
     _lastLyricDraw = millis();
@@ -93,7 +112,6 @@ void App::drawLyricsScreen() {
     const int16_t dispW = _display.width();
     const int16_t dispH = _display.height();
     const bool landscape = dispW > dispH;
-    const bool full = _settings.getLyricFull();
     uint16_t lyricColor = Display::hexToRGB565(_settings.getLyricColor());
 
     // Current-line geometry (shared by the full redraw and the anim tick).
@@ -113,6 +131,59 @@ void App::drawLyricsScreen() {
         curr = _display.fitText(current, currSize, dispW - 20);
     }
 
+    // Pixelated bar + timestamp readouts (7x13 font). tickOnly=true erases just
+    // the previous timestamp readouts (per-second refresh); otherwise the whole
+    // bar redraws.
+    auto drawBarAndTimestamps = [&](bool tickOnly) {
+        const int16_t barX = 20;
+        const int16_t barY = dispH - 18;
+        const int16_t barW = dispW - 40;
+        const int16_t barH = 8;
+        const int16_t block = 6; // pixel block size
+        const int16_t gap = 2;   // gap between blocks
+        const int16_t pitch = block + gap;
+        // Timestamp ink sits ABOVE the given y (u8g2 baseline), so drawing at
+        // barY-4 parks the digits just above the bar; the 15px erase band
+        // (barY-15..barY-1, also above the bar) covers the whole 7x13 glyph cell.
+        const int16_t tsY = barY - 4;
+        const int16_t tsEraseY = barY - 15;
+        const int16_t tsEraseH = 15;
+        uint8_t progress = _lyricsManager.getProgress();
+        if (tickOnly) {
+            // Per-second tick: drawPixelText already paints each glyph cell with
+            // a black background in the same SPI pass, so the old digits are
+            // erased in place without a black flash (which the eye reads as a
+            // blink). Only the leftover tail of a narrower string needs a clear.
+            String tEl = fmtTime(_lyricsManager.getElapsedSec());
+            int16_t nw = (int16_t)_display.measurePixelText(tEl.c_str());
+            if (nw < _lastTsLW) {
+                _display.drawFilledRectangle(barX + nw, tsEraseY, _lastTsLW - nw + 1, tsEraseH, BLACK);
+            }
+            _display.drawPixelText(barX, tsY, tEl.c_str(), lyricColor);
+            _lastTsLW = nw;
+            return; // duration never changes; leave the right side untouched
+        } else {
+            _display.drawRectangle(barX, barY, barW, barH, RGB565(40, 40, 40));
+            int16_t n = barW / pitch;              // total block slots
+            int16_t filled = (progress * n) / 100; // blocks lit
+            for (int16_t i = 0; i < filled && i < n; i++) {
+                _display.drawFilledRectangle(barX + i * pitch, barY + 1, block, barH - 2, lyricColor);
+            }
+        }
+        if (_lyricsManager.getDurationSec() > 0) {
+            String tEl = fmtTime(_lyricsManager.getElapsedSec());
+            String tDur = fmtTime(_lyricsManager.getDurationSec());
+            _display.drawPixelText(barX, tsY, tEl.c_str(), lyricColor);
+            _lastTsLW = (int16_t)_display.measurePixelText(tEl.c_str());
+            int16_t tdw = (int16_t)_display.measurePixelText(tDur.c_str());
+            _display.drawPixelText(barX + barW - tdw, tsY, tDur.c_str(), RGB565(120, 120, 120));
+            _lastTsRW = tdw;
+        } else {
+            _lastTsLW = 0;
+            _lastTsRW = 0;
+        }
+    };
+
     // Draw just the current lyric line (with effects) at a given Y. When
     // outX/outW are given, the drawn line's bounding box is returned so the
     // animation tick can erase exactly that region.
@@ -121,8 +192,11 @@ void App::drawLyricsScreen() {
         if (glow || rainbow) {
             // ~10ms per hue step -> one full rainbow sweep every ~2.5s
             uint8_t hueBase = (uint8_t)(millis() / 10);
+            // On the busy non-full screen the glow is one step dimmer so it
+            // reads as a halo instead of blinding the surrounding lines.
+            uint8_t glowDim = full ? 0 : 1;
             _display.drawCenteredTextEffect(y, curr.c_str(), lyricColor, currSize,
-                                            glow, rainbow, hueBase, outX, outW);
+                                            glow, rainbow, hueBase, outX, outW, glowDim);
         } else {
             _display.drawCenteredTextAt(y, curr.c_str(), lyricColor, currSize);
             if (outX || outW) {
@@ -134,7 +208,7 @@ void App::drawLyricsScreen() {
     };
 
     if (!stateChanged) {
-        // Animation tick: only the current line changes, so erase just its
+        // Rainbow animation: only the current line changes, so erase just its
         // bounding box (plus glow margin) and redraw it. The rest of the
         // screen is untouched -> no visible flicker.
         if (current.length() > 0 && _lastCurrW > 0) {
@@ -142,6 +216,10 @@ void App::drawLyricsScreen() {
             _display.drawFilledRectangle(_lastCurrX - pad, _lastCurrY - pad,
                                          _lastCurrW + 2 * pad, _lastCurrH + 2 * pad, BLACK);
             drawCurrLine(_lastCurrY);
+        }
+        // Per-second timestamp tick: refresh just the two readouts above the bar.
+        if (timeTick) {
+            drawBarAndTimestamps(true);
         }
         return;
     }
@@ -162,9 +240,12 @@ void App::drawLyricsScreen() {
             header += " - " + _lyricsManager.getArtist();
         }
     }
-    if (header.length() > 0) {
+    // Header (song title) is hidden in full-screen style for a clean look.
+    // y=16 not 2: Arduino_GFX draws unifont ink 14px above the given y (glyph
+    // height 16 + y-offset -2), so y=2 would clip the top of the text.
+    if (!full && header.length() > 0) {
         header = _display.fitText(header, 1, dispW - 20);
-        _display.drawCenteredTextAt(2, header.c_str(), YELLOW, 1);
+        _display.drawCenteredTextAt(16, header.c_str(), YELLOW, 1);
         _display.drawLine(10, 20, dispW - 10, 20, RGB565(64, 64, 64));
     }
 
@@ -206,21 +287,15 @@ void App::drawLyricsScreen() {
         }
     }
 
-    // --- Progress bar at bottom (when active) ---
-    if (_lyricsManager.isActive() && current.length() > 0) {
-        int16_t barY = dispH - 16;
-        int16_t barW = dispW - 40;
-        int16_t barX = 20;
-        uint8_t progress = _lyricsManager.getProgress();
-        int16_t filled = (progress * barW) / 100;
-        _display.drawRectangle(barX, barY, barW, 6, RGB565(40, 40, 40));
-        if (filled > 0) {
-            _display.drawFilledRectangle(barX + 1, barY + 1, filled - 1, 4, lyricColor);
-        }
+    // --- Pixelated progress bar + timestamps (hidden in full-screen style) ---
+    if (!full && _lyricsManager.isActive() && current.length() > 0) {
+        drawBarAndTimestamps(false);
     }
 
-    // Active indicator dot
-    if (_lyricsManager.isActive()) {
+    // Active indicator dot (hidden in full-screen style)
+
+    // Active indicator dot (hidden in full-screen style)
+    if (!full && _lyricsManager.isActive()) {
         _display.drawCircle(dispW - 8, dispH - 8, 3, GREEN);
     }
 }
@@ -235,8 +310,10 @@ void App::drawDefaultScreen() {
     if (landscape) {
         // Top-anchor the title in landscape: drawCenteredText would vertically
         // center it in the short 240px frame and collide with the content.
-        _display.drawCenteredTextAt(6, "DEVICE DASHBOARD", WHITE, 2);
-        _display.drawLine(10, 44, dispW - 10, 44, GREEN);
+        // y=30 not 6: unifont ink renders 14*size px ABOVE the given y, so a
+        // small y clips the top of the text off-screen.
+        _display.drawCenteredTextAt(30, "DEVICE DASHBOARD", WHITE, 2);
+        _display.drawLine(10, 40, dispW - 10, 40, GREEN);
     } else {
         _display.drawCenteredText("DEVICE DASHBOARD", WHITE, 2);
         _display.drawLine(10, 30, dispW - 10, 30, GREEN);
@@ -245,21 +322,23 @@ void App::drawDefaultScreen() {
     if (landscape) {
         // Landscape (320x240): stack the sections more tightly since there is
         // less vertical room, but the URL still fits at size 2 on the wide axis.
-        _display.drawText(10, 46, "Wi-Fi Status:", YELLOW, 2);
+        // Y values already account for unifont's ink rendering 14*size px above
+        // the given y (e.g. size-2 text at y=70 occupies rows 42..73).
+        _display.drawText(10, 70, "Wi-Fi Status:", YELLOW, 2);
         String statusStr = _wifiManager.getStatusString();
         uint16_t statusColor = _wifiManager.isConnected() ? GREEN : RED;
-        _display.drawText(10, 76, statusStr.c_str(), statusColor, 2);
+        _display.drawText(10, 100, statusStr.c_str(), statusColor, 2);
 
-        _display.drawText(10, 116, "Web Dashboard:", YELLOW, 2);
+        _display.drawText(10, 140, "Web Dashboard:", YELLOW, 2);
         if (_wifiManager.isConnected()) {
             String url = "http://" + _wifiManager.ipAddress();
             uint8_t urlSize = (url.length() <= 28) ? 2 : 1;
-            _display.drawText(10, 146, url.c_str(), CYAN, urlSize);
+            _display.drawText(10, 170, url.c_str(), CYAN, urlSize);
 
             _display.drawText(10, 196, "Open in phone browser", WHITE, 1);
             _display.drawText(10, 214, "to control display", WHITE, 1);
         } else {
-            _display.drawText(10, 146, "Waiting for Wi-Fi...", RGB565(100, 100, 100), 1);
+            _display.drawText(10, 170, "Waiting for Wi-Fi...", RGB565(100, 100, 100), 1);
             _display.drawText(10, 196, "Web address will appear", WHITE, 1);
             _display.drawText(10, 214, "once connected", WHITE, 1);
         }

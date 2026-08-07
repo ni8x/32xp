@@ -583,7 +583,9 @@ void WebServer::setupRoutes() {
         String prev = request->hasParam("prev", true) ? request->getParam("prev", true)->value() : "";
         String next = request->hasParam("next", true) ? request->getParam("next", true)->value() : "";
         uint8_t prog = request->hasParam("progress", true) ? (uint8_t)request->getParam("progress", true)->value().toInt() : 0;
-        _lyricsManager.setLine(current, prev, next, prog);
+        uint32_t posSec = request->hasParam("pos", true) ? (uint32_t)request->getParam("pos", true)->value().toInt() : 0;
+        uint32_t durSec = request->hasParam("dur", true) ? (uint32_t)request->getParam("dur", true)->value().toInt() : 0;
+        _lyricsManager.setLine(current, prev, next, prog, posSec, durSec);
         LOG_INFO(TAG, ("Lyric line received: " + current).c_str());
         request->send(200, "text/plain", "OK");
     });

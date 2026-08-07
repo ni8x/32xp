@@ -45,9 +45,19 @@ class Esp32Client(rawIp: String) {
         body = "artist=${artist.urlEncode()}&title=${title.urlEncode()}"
     )
 
-    suspend fun sendLine(current: String, prev: String = "", next: String = "", progress: Int = 0): Result<Unit> = postForm(
+    // posSec/durSec let the ESP32 show live m:ss timestamps on the progress
+    // bar (durSec == 0 means the length is unknown and timestamps are hidden).
+    suspend fun sendLine(
+        current: String,
+        prev: String = "",
+        next: String = "",
+        progress: Int = 0,
+        posSec: Int = 0,
+        durSec: Int = 0
+    ): Result<Unit> = postForm(
         path = "/api/lyrics/line",
-        body = "current=${current.urlEncode()}&prev=${prev.urlEncode()}&next=${next.urlEncode()}&progress=$progress"
+        body = "current=${current.urlEncode()}&prev=${prev.urlEncode()}&next=${next.urlEncode()}" +
+            "&progress=$progress&pos=$posSec&dur=$durSec"
     )
 
     suspend fun clearLyrics(): Result<Unit> = postForm(path = "/api/lyrics/clear", body = "")

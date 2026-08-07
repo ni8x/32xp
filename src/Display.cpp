@@ -6,6 +6,20 @@
 
 static const char* TAG = "Display";
 
+// Timestamp / status pixel font. Swap here to try other u8g2 fonts, e.g.:
+//   u8g2_font_7x13_tr       - clean 7x13 terminal font, very readable (default)
+//   u8g2_font_6x10_tr       - compact 6x10, still crisp
+//   u8g2_font_5x7_tr        - tiny plain 5x7
+//   u8g2_font_press_mel_tr  - Press Start (game console)
+//   u8g2_font_pixelpoiiz_tr - arcade pixel (was the old default)
+//   u8g2_font_bubble_tr     - bubble letters
+// NOTE: like unifont, u8g2 fonts draw their ink ABOVE the given y (the y is
+// the baseline). The 7x13 family has ~10px ascent / ~3px descent. App::drawLyricsScreen parks the
+// timestamps at barY-4 and erases a 15px band (barY-15..barY-1), so any font
+// up to ~13px tall with <=11px ascent fits; retune those two numbers if you
+// pick a taller font.
+static const uint8_t* const PIXEL_FONT = u8g2_font_7x13_tr;
+
 Display::Display() : _bus(nullptr), _gfx(nullptr) {
 }
 
@@ -273,7 +287,7 @@ void Display::drawRainbowText(int16_t x, int16_t y, const char* text, uint8_t si
 
 void Display::drawCenteredTextEffect(int16_t y, const char* text, uint16_t color, uint8_t size,
                                      bool glow, bool rainbow, uint8_t hueBase,
-                                     int16_t* outX, int16_t* outW) {
+                                     int16_t* outX, int16_t* outW, uint8_t glowDimOffset) {
     if (!_gfx || !text || strlen(text) == 0) {
         if (outX) *outX = 0;
         if (outW) *outW = 0;
@@ -298,7 +312,7 @@ void Display::drawCenteredTextEffect(int16_t y, const char* text, uint16_t color
 
     // The shaped layout is computed ONCE per call and reused by every halo
     // pass; re-running the script shaping per pass would waste CPU on every
-    // animated frame (25 passes for a 2-ring glow + main).
+    // animated frame (25 passes for a 3-ring compass glow + main).
     ShapedLayoutItem items[64];
     size_t nItems = 0;
     if (shaped) {
@@ -332,16 +346,17 @@ void Display::drawCenteredTextEffect(int16_t y, const char* text, uint16_t color
     };
 
     if (glow) {
-        // Radiant halo: two square rings (1px + 2px at text size 1) with the
-        // brightness falling off 50% per ring, so it reads as a soft glow
-        // instead of a hard 1px outline.
-        static constexpr int16_t GLOW_RADIUS = 2; // px at text size 1 - tune me
+        // Radiant halo: three rings at 1..GLOW_RADIUS px (text size 1) using the
+        // 8 compass offsets per ring (N/E/S/W + diagonals), with brightness
+        // falling off 50% per ring outward. Compass rings keep the glow round
+        // and soft instead of a blocky square outline; the extra ring gives it
+        // reach without more passes than the old 2-ring square halo.
+        static constexpr int16_t GLOW_RADIUS = 3; // px at text size 1 - tune me
+        static const int8_t OFF[8][2] = {{-1,-1},{0,-1},{1,-1},{-1,0},{1,0},{-1,1},{0,1},{1,1}};
         for (int16_t r = GLOW_RADIUS; r >= 1; r--) {
-            for (int16_t dx = -r; dx <= r; dx++) {
-                for (int16_t dy = -r; dy <= r; dy++) {
-                    if (abs(dx) != r && abs(dy) != r) continue; // ring only
-                    renderPass(dx * size, dy * size, (uint8_t)r);
-                }
+            uint8_t dimLevel = (uint8_t)(r + glowDimOffset); // ring r dimmed r (or more) times
+            for (int k = 0; k < 8; k++) {
+                renderPass(OFF[k][0] * r * size, OFF[k][1] * r * size, dimLevel);
             }
         }
     }
@@ -459,6 +474,30 @@ uint16_t Display::measureShapedText(const char* text, uint8_t size) {
     int16_t w = 0;
     layoutShapedText(text, items, 64, &w);
     return (uint16_t)w * size;
+}
+
+void Display::drawPixelText(int16_t x, int16_t y, const char* text, uint16_t color) {
+    if (!_gfx || !text) return;
+    _gfx->setFont(PIXEL_FONT); // retro pixel font from the U8g2 lib
+    // Paint a black background per glyph cell in the same SPI pass: this erases
+    // the previous timestamp in place (no separate black flash -> no blink)
+    // and is invisible on the black screen otherwise.
+    _gfx->setTextColor(color, BLACK);
+    _gfx->setTextSize(1);
+    _gfx->setCursor(x, y);
+    _gfx->print(text);
+    _gfx->setFont(u8g2_font_unifont_h_utf8); // restore the lyric font
+}
+
+uint16_t Display::measurePixelText(const char* text) {
+    if (!_gfx || !text) return 0;
+    _gfx->setFont(PIXEL_FONT);
+    _gfx->setTextSize(1);
+    int16_t x1, y1;
+    uint16_t w, h;
+    _gfx->getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
+    _gfx->setFont(u8g2_font_unifont_h_utf8); // restore the lyric font
+    return w;
 }
 
 uint16_t Display::measureText(const char* text, uint8_t size) {

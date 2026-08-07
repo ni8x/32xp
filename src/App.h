@@ -45,6 +45,9 @@ private:
     int16_t _lastCurrY;
     int16_t _lastCurrW;
     int16_t _lastCurrH;
+    // Widths of the last drawn timestamp readouts (for the per-second partial tick).
+    int16_t _lastTsLW;
+    int16_t _lastTsRW;
     bool _lastLyricActive;
     bool _lastPhoneConnected;
     String _lastLyricTitle;
