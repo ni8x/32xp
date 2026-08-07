@@ -97,11 +97,74 @@ class LyricsEngine(
             // Small delay before starting to let the user start the song
             delay(500)
 
-            val startTime = System.currentTimeMillis()
+            // Sync to the player's REAL position when available (via the media
+            // session), so buffering/queued songs, long intros, and seeks all
+            // stay correct. Fall back to a local clock that starts when playback
+            // begins; players with no state at all fall back to detection time.
+            val detectedAt = System.currentTimeMillis()
+            var fallbackStart = -1L
             var lastIndex = -1
+            var waitingShown = false
+            var waitingSince = 0L
+            var gaveUpWaiting = false
 
             while (isActive()) {
-                val elapsedMs = System.currentTimeMillis() - startTime
+                val now = System.currentTimeMillis()
+                var elapsedMs = MusicNotificationListener.currentPlaybackPosition()
+
+                if (elapsedMs == null) {
+                    // No position source: run on a local clock.
+                    if (fallbackStart < 0) {
+                        if (!MusicNotificationListener.playbackSignaled()) {
+                            fallbackStart = detectedAt // no state at all: old behavior
+                        } else if (MusicNotificationListener.isPlaying) {
+                            fallbackStart = now
+                        } else {
+                            if (!waitingShown) {
+                                onStatus("Waiting for playback...")
+                                waitingShown = true
+                                waitingSince = now
+                            }
+                            // Grace period: if the player never reports playback
+                            // (or misreports paused), start anyway after 5s.
+                            if (now - waitingSince < 5000) {
+                                delay(250)
+                                continue
+                            }
+                            fallbackStart = detectedAt
+                            gaveUpWaiting = true
+                        }
+                    }
+                    // Playback may have started after we gave up waiting: re-anchor
+                    // the clock so the wait time isn't included (lyrics would run
+                    // early with no position source to correct them).
+                    if (gaveUpWaiting && MusicNotificationListener.isPlaying) {
+                        fallbackStart = now
+                        gaveUpWaiting = false
+                    }
+                    elapsedMs = System.currentTimeMillis() - fallbackStart
+                } else if (elapsedMs <= 0 && !MusicNotificationListener.isPlaying) {
+                    // Song known but not playing yet (buffering / queued): hold
+                    // the screen instead of showing the first line early.
+                    if (!waitingShown) {
+                        onStatus("Waiting for playback...")
+                        waitingShown = true
+                        waitingSince = now
+                    }
+                    // Grace period: never hold the screen forever for players
+                    // that don't report playback state reliably.
+                    if (now - waitingSince < 5000) {
+                        delay(250)
+                        continue
+                    }
+                }
+
+                if (waitingShown) {
+                    waitingShown = false
+                    waitingSince = 0L
+                    onStatus("Syncing: $title (${lyrics.size} lines)")
+                }
+
                 val currentIndex = findLineIndex(elapsedMs)
 
                 if (currentIndex != lastIndex) {

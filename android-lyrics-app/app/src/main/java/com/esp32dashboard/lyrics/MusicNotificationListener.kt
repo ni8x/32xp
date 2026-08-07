@@ -1,10 +1,15 @@
 package com.esp32dashboard.lyrics
 
-import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.media.MediaMetadata
+import android.media.session.MediaController
+import android.media.session.MediaSessionManager
+import android.media.session.PlaybackState
 import android.os.Build
+import android.os.SystemClock
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
@@ -51,6 +56,55 @@ class MusicNotificationListener : NotificationListenerService() {
         var currentArtist = ""
         @Volatile
         var currentTitle = ""
+
+        // --- Playback position tracking (P1) ---
+        // Lyric sync uses the player's REAL position instead of a local timer
+        // started at detection, so buffering/queued songs (or long intros) no
+        // longer drift. Values are updated by a MediaController attached to the
+        // active media session, with notification extras as a fallback.
+        @Volatile
+        var positionAvailable = false
+        @Volatile
+        var playbackPositionMs = 0L
+        @Volatile
+        var positionUpdatedAtElapsed = 0L
+        @Volatile
+        var isPlaying = false
+        @Volatile
+        var playbackSpeed = 1f
+        @Volatile
+        var durationMs = 0L
+        @Volatile
+        var playbackSignalSeen = false
+
+        /**
+         * Interpolated playback position in ms, or null when no usable position
+         * source exists (caller falls back to its own clock).
+         */
+        fun currentPlaybackPosition(): Long? {
+            if (!positionAvailable || !playbackSignalSeen) return null
+            var pos = playbackPositionMs
+            if (positionUpdatedAtElapsed > 0 && isPlaying) {
+                val deltaMs = SystemClock.elapsedRealtime() - positionUpdatedAtElapsed
+                pos += (deltaMs * playbackSpeed).toLong()
+            }
+            if (durationMs > 0 && pos > durationMs) pos = durationMs
+            return pos.coerceAtLeast(0L)
+        }
+
+        /** True once any playback-state info (controller or extras) has arrived. */
+        fun playbackSignaled(): Boolean = playbackSignalSeen
+
+        /**
+         * New song detected: zero the position and wait for playback to start.
+         * Source availability flags are kept, so players without a position
+         * source still fall back to the engine's timer.
+         */
+        fun resetPlaybackState() {
+            playbackPositionMs = 0L
+            positionUpdatedAtElapsed = SystemClock.elapsedRealtime()
+            isPlaying = false
+        }
 
         // Keep reference to the last connected instance for rescan
         @Volatile
@@ -107,6 +161,10 @@ class MusicNotificationListener : NotificationListenerService() {
                 currentTitle = title
                 currentArtist = artist
 
+                // New song: wait for playback to begin before syncing
+                resetPlaybackState()
+                inst.readPlaybackExtras(notifExtras)
+
                 Log.d(TAG, "Rescanned song: $title - $artist")
 
                 val intent = Intent(ACTION_SONG_CHANGED).apply {
@@ -151,16 +209,126 @@ class MusicNotificationListener : NotificationListenerService() {
         }
     }
 
+    // Attached media controllers, unregistered on disconnect to avoid leaks
+    private val mediaControllers = mutableListOf<Pair<MediaController, MediaController.Callback>>()
+
     override fun onListenerConnected() {
         instance = this
         Log.d(TAG, "Notification listener connected")
+        attachMediaControllers()
         // Auto-rescan when first connected
         rescanActive()
     }
 
     override fun onListenerDisconnected() {
         instance = null
+        for ((controller, callback) in mediaControllers) {
+            try {
+                controller.unregisterCallback(callback)
+            } catch (_: Exception) {}
+        }
+        mediaControllers.clear()
         Log.d(TAG, "Notification listener disconnected")
+    }
+
+    /**
+     * Attach to the active media sessions so we can read the real playback
+     * position. A notification listener is implicitly authorized to call
+     * getActiveSessions without MEDIA_CONTENT_CONTROL.
+     */
+    private fun attachMediaControllers() {
+        try {
+            val msm = getSystemService(Context.MEDIA_SESSION_SERVICE) as? MediaSessionManager ?: return
+            val component = ComponentName(this, MusicNotificationListener::class.java)
+            val sessions = msm.getActiveSessions(component)
+            // Prefer music apps; fall back to any session so unlisted/renamed
+            // builds (like future ReVanced renames) still get position sync.
+            val musicSessions = sessions.filter { isMusicApp(it.packageName) }
+            val targets = if (musicSessions.isNotEmpty()) musicSessions else sessions
+            // Idempotent: sessions created AFTER the listener connected are only
+            // visible on a later getActiveSessions call, so this is re-run on
+            // every music notification post. Skip packages already attached.
+            val attached = mediaControllers.map { it.first.packageName }.toSet()
+            for (controller in targets) {
+                if (controller.packageName in attached) continue
+                val callback = mediaControllerCallback(controller)
+                controller.registerCallback(callback)
+                mediaControllers.add(controller to callback)
+                // Prime with current state so a mid-song START syncs immediately
+                updateFromPlaybackState(controller.playbackState)
+                controller.metadata?.let {
+                    durationMs = it.getLong(MediaMetadata.METADATA_KEY_DURATION)
+                }
+                Log.d(TAG, "Attached media controller for ${controller.packageName}")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to attach media controllers: ${e.message}")
+        }
+    }
+
+    private fun mediaControllerCallback(controller: MediaController) = object : MediaController.Callback() {
+        override fun onPlaybackStateChanged(state: PlaybackState?) {
+            updateFromPlaybackState(state)
+        }
+
+        override fun onMetadataChanged(metadata: MediaMetadata?) {
+            metadata?.let { durationMs = it.getLong(MediaMetadata.METADATA_KEY_DURATION) }
+        }
+
+        override fun onSessionDestroyed() {
+            // Player recreated its session (common on track changes): prune the
+            // dead controller so a later getActiveSessions picks up the new one.
+            Log.d(TAG, "Media session destroyed for ${controller.packageName}")
+            try {
+                controller.unregisterCallback(this)
+            } catch (_: Exception) {}
+            mediaControllers.removeAll { it.first === controller }
+        }
+    }
+
+    private fun updateFromPlaybackState(state: PlaybackState?) {
+        if (state == null) return
+        playbackSignalSeen = true
+        positionAvailable = true
+        isPlaying = state.state == PlaybackState.STATE_PLAYING
+        playbackSpeed = state.playbackSpeed
+        playbackPositionMs = state.position
+        // lastPositionUpdateTime is on the elapsedRealtime clock; 0 means unknown
+        positionUpdatedAtElapsed =
+            if (state.lastPositionUpdateTime > 0) state.lastPositionUpdateTime
+            else SystemClock.elapsedRealtime()
+    }
+
+    /**
+     * Fallback position source: many players embed playback state in the
+     * notification extras. Called on every music notification post so the
+     * position stays fresh even without a media controller.
+     */
+    private fun readPlaybackExtras(extras: android.os.Bundle) {
+        try {
+            if (!extras.containsKey("android.media.playstatechanged") &&
+                !extras.containsKey("android.media.playstate.PLAYBACK_STATE")
+            ) {
+                return
+            }
+            playbackSignalSeen = true
+            if (extras.containsKey("android.media.playstate.IS_PLAYING")) {
+                isPlaying = extras.getBoolean("android.media.playstate.IS_PLAYING")
+            }
+            if (extras.containsKey("android.media.playstate.PLAYBACK_POSITION")) {
+                val pos = extras.getLong("android.media.playstate.PLAYBACK_POSITION")
+                var ts = extras.getLong("android.media.playstate.LAST_POSITION_UPDATE_TIMESTAMP")
+                if (ts <= 0) ts = SystemClock.elapsedRealtime()
+                positionAvailable = true
+                playbackPositionMs = pos
+                positionUpdatedAtElapsed = ts
+            }
+            if (extras.containsKey("android.media.metadata.DURATION")) {
+                durationMs = extras.getLong("android.media.metadata.DURATION")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "readPlaybackExtras failed: ${e.message}")
+        }
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
@@ -183,6 +351,11 @@ class MusicNotificationListener : NotificationListenerService() {
             Log.d(TAG, "  Extra key=$k value=$value")
         }
 
+        // Keep the position fresh on every post (some players re-post frequently),
+        // and pick up media sessions created after the listener connected.
+        readPlaybackExtras(extras)
+        attachMediaControllers()
+
         // Extract song title and artist using shared helper
         val title = extractTitleFromExtras(extras)
         val artist = extractArtistFromExtras(extras)
@@ -202,6 +375,10 @@ class MusicNotificationListener : NotificationListenerService() {
 
         currentTitle = title
         currentArtist = artist
+
+        // New song: wait for playback to begin before syncing
+        resetPlaybackState()
+        readPlaybackExtras(extras)
 
         Log.d(TAG, "Song detected: $title - $artist")
 
