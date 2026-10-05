@@ -1,6 +1,6 @@
 #include "WebServer.h"
 #include "MediaManager.h"
-#include "LyricsManager.h"
+#include "plugins/PluginManager.h"
 #include "Config.h"
 #include "Logger.h"
 #include <LittleFS.h>
@@ -9,6 +9,14 @@
 
 static const char* TAG = "WebServer";
 
+// Dashboard shell. Plugin cards (and each plugin's <script>) are injected at
+// boot: %MODE_OPTIONS% = display-mode <option> list, %PLUGIN_CARDS% = plugin
+// uiSection() HTML (scripts included).
+//
+// Any plugin card that needs live updates defines
+//   function update<Plugin>(data)   // called with /api/status JSON
+// and registers it via registerStatusUpdater(update<Plugin>) — see the
+// lyrics card script for the pattern.
 const char index_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE HTML>
 <html lang="en">
@@ -16,6 +24,13 @@ const char index_html[] PROGMEM = R"rawliteral(
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ESP32 Dashboard Config</title>
+  <script>
+    // Plugin cards register functions called with every /api/status poll.
+    // Defined in <head> so plugin scripts (injected above the main block)
+    // can call it while the page is still loading.
+    var statusUpdaters = [];
+    function registerStatusUpdater(fn) { statusUpdaters.push(fn); }
+  </script>
   <style>
     body { font-family: system-ui, -apple-system, sans-serif; background: #f4f4f9; color: #333; margin: 0; padding: 20px; }
     .container { max-width: 600px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
@@ -49,48 +64,14 @@ const char index_html[] PROGMEM = R"rawliteral(
       <h2>Screen Mode Switcher</h2>
       <label>Active Screen Mode</label>
       <select id="displayMode" onchange="postData('/api/mode', 'mode=' + this.value)">
-        <option value="0">Clock & Weather Mode</option>
-        <option value="1">Media / Slideshow Mode</option>
-        <option value="2">Lyrics Mode</option>
+%MODE_OPTIONS%
       </select>
       <label>Slideshow Interval: <span id="intervalVal">5</span> sec</label>
       <input type="range" id="ssInterval" min="2" max="60" value="5" oninput="document.getElementById('intervalVal').innerText = this.value">
       <button onclick="postData('/api/interval', 'seconds=' + document.getElementById('ssInterval').value)">Apply Interval</button>
     </div>
 
-    <div class="card">
-      <h2>Lyrics Status</h2>
-      <div class="row"><span>Status:</span> <span class="value" id="lyricStatus">-</span></div>
-      <div class="row"><span>Phone:</span> <span class="value" id="phoneStatus" style="color:#888;">Not connected</span></div>
-      <div class="row"><span>Song:</span> <span class="value lyric-line" id="lyricTitle">-</span></div>
-      <div class="row"><span>Artist:</span> <span class="value lyric-line" id="lyricArtist">-</span></div>
-      <div class="row"><span>Line:</span> <span class="value lyric-line" id="lyricLine">-</span></div>
-      <div class="row"><span>Progress:</span> <span class="value" id="lyricProgress">-</span></div>
-      <input type="text" id="manualLyric" placeholder="Manual display test text">
-      <button onclick="sendManualLyric()">Show Test Text</button>
-      <br><br>
-      <label>Lyric Text Color</label>
-      <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
-        <input type="color" id="lyricColor" value="#00ffff" style="height:40px; padding:2px; flex:1; min-width:50px;">
-        <input type="text" id="lyricColorHex" value="#00ffff" maxlength="7" placeholder="#RRGGBB" style="flex:2; margin-bottom:0;">
-        <button onclick="saveLyricColor()">Save</button>
-      </div>
-      <p style="color: #888; font-size: 0.85em; margin:0 0 10px;">Pick a swatch or type any custom hex code, e.g. #ff44aa.</p>
-      <label style="margin-top:8px; display:block;">Lyrics Style</label>
-      <div style="display:flex; gap:24px; margin-bottom:4px;">
-        <label style="display:flex; align-items:center; gap:6px; font-weight:normal;">
-          <input type="checkbox" id="lyricGlow" onchange="postLyricEffects()"> Glow
-        </label>
-        <label style="display:flex; align-items:center; gap:6px; font-weight:normal;">
-          <input type="checkbox" id="lyricRainbow" onchange="postLyricEffects()"> Rainbow
-        </label>
-        <label style="display:flex; align-items:center; gap:6px; font-weight:normal;">
-          <input type="checkbox" id="lyricFull" onchange="postLyricEffects()"> Full Screen (hide prev/next)
-        </label>
-      </div>
-      <p style="color: #888; font-size: 0.85em; margin:0 0 10px;">Effects apply to the current lyric line and can be used together.</p>
-      <p style="color: #888; font-size: 0.85em;">Tap TEST in the Android app to verify connection, then START to sync lyrics.</p>
-    </div>
+%PLUGIN_CARDS%
 
     <div class="card">
       <h2>Upload Media (JPEG / PNG / GIF)</h2>
@@ -195,21 +176,6 @@ const char index_html[] PROGMEM = R"rawliteral(
         if (document.activeElement !== document.getElementById('heartColor') && data.heartColor !== undefined) {
           document.getElementById('heartColor').value = data.heartColor;
         }
-        var colorTyping = (document.activeElement === document.getElementById('lyricColor') ||
-                           document.activeElement === document.getElementById('lyricColorHex'));
-        if (!colorTyping && data.lyricColor !== undefined) {
-          document.getElementById('lyricColor').value = data.lyricColor;
-          document.getElementById('lyricColorHex').value = data.lyricColor;
-        }
-        if (document.activeElement !== document.getElementById('lyricGlow') && data.lyricGlow !== undefined) {
-          document.getElementById('lyricGlow').checked = !!data.lyricGlow;
-        }
-        if (document.activeElement !== document.getElementById('lyricRainbow') && data.lyricRainbow !== undefined) {
-          document.getElementById('lyricRainbow').checked = !!data.lyricRainbow;
-        }
-        if (document.activeElement !== document.getElementById('lyricFull') && data.lyricFull !== undefined) {
-          document.getElementById('lyricFull').checked = !!data.lyricFull;
-        }
         if (document.activeElement !== document.getElementById('lat') && data.lat !== undefined) {
           document.getElementById('lat').value = data.lat;
         }
@@ -229,21 +195,8 @@ const char index_html[] PROGMEM = R"rawliteral(
           document.getElementById('ssInterval').value = data.ssInterval;
           document.getElementById('intervalVal').innerText = data.ssInterval;
         }
-        // Lyrics status
-        if (data.lyrics !== undefined) {
-          document.getElementById('lyricStatus').innerText = data.lyrics.active ? 'Active' : 'Idle';
-          var phoneEl = document.getElementById('phoneStatus');
-          if (data.lyrics.phoneConnected) {
-            phoneEl.innerText = '✅ Connected';
-            phoneEl.style.color = '#4CAF50';
-          } else {
-            phoneEl.innerText = 'Not connected';
-            phoneEl.style.color = '#888';
-          }
-          document.getElementById('lyricTitle').innerText = data.lyrics.title || '-';
-          document.getElementById('lyricArtist').innerText = data.lyrics.artist || '-';
-          document.getElementById('lyricLine').innerText = data.lyrics.currentLine || '-';
-          document.getElementById('lyricProgress').innerText = data.lyrics.progress + '%';
+        for (var i = 0; i < statusUpdaters.length; i++) {
+          try { statusUpdaters[i](data); } catch (e) { console.error(e); }
         }
       });
       loadFiles();
@@ -269,35 +222,6 @@ const char index_html[] PROGMEM = R"rawliteral(
       }
     }
 
-    function saveLyricColor() {
-      var hex = document.getElementById('lyricColorHex').value.trim();
-      if (!/^#[0-9a-fA-F]{6}$/.test(hex)) { alert('Enter a color as #RRGGBB'); return; }
-      postData('/api/lyriccolor', 'color=' + encodeURIComponent(hex));
-    }
-
-    // Keep the hex text field in sync with the native color swatch.
-    document.getElementById('lyricColor').addEventListener('input', function() {
-      document.getElementById('lyricColorHex').value = this.value;
-    });
-
-    function postLyricEffects() {
-      var glow = document.getElementById('lyricGlow').checked ? 1 : 0;
-      var rainbow = document.getElementById('lyricRainbow').checked ? 1 : 0;
-      var full = document.getElementById('lyricFull').checked ? 1 : 0;
-      postData('/api/lyriceffect', 'glow=' + glow + '&rainbow=' + rainbow + '&full=' + full);
-    }
-
-    function sendManualLyric() {
-      const text = document.getElementById('manualLyric').value.trim();
-      if (!text) return;
-      fetch('/api/lyrics/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'line', current: text, progress: 0 })
-      })
-        .then(() => updateData());
-    }
-
     function postData(url, body) {
       fetch(url, {
         method: 'POST',
@@ -315,8 +239,10 @@ const char index_html[] PROGMEM = R"rawliteral(
 
 static File uploadFile;
 
-WebServer::WebServer(Settings& settings, WiFiManager& wifiManager, MediaManager& mediaManager, LyricsManager& lyricsManager)
-    : _settings(settings), _wifiManager(wifiManager), _mediaManager(mediaManager), _lyricsManager(lyricsManager), _server(80) {
+WebServer::WebServer(Settings& settings, WiFiManager& wifiManager, MediaManager& mediaManager,
+                     PluginManager* pluginManager)
+    : _settings(settings), _wifiManager(wifiManager), _mediaManager(mediaManager),
+      _pluginManager(pluginManager), _server(80) {
 }
 
 WebServer::~WebServer() {
@@ -347,72 +273,91 @@ String WebServer::buildStatusJson() {
     doc["lyricGlow"] = _settings.getLyricGlow();
     doc["lyricRainbow"] = _settings.getLyricRainbow();
     doc["lyricFull"] = _settings.getLyricFull();
+    doc["lyricGradient"] = _settings.getLyricGradient();
     doc["lat"] = _settings.getLatitude();
     doc["lon"] = _settings.getLongitude();
     doc["displayMode"] = _settings.getDisplayMode();
     doc["rotation"] = _settings.getRotation();
     doc["ssInterval"] = _settings.getSlideshowInterval();
 
-    JsonObject lyrics = doc["lyrics"].to<JsonObject>();
-    lyrics["active"] = _lyricsManager.isActive();
-    lyrics["phoneConnected"] = _lyricsManager.isPhoneConnected();
-    lyrics["title"] = _lyricsManager.getTitle();
-    lyrics["artist"] = _lyricsManager.getArtist();
-    lyrics["currentLine"] = _lyricsManager.getCurrentLine();
-    lyrics["progress"] = _lyricsManager.getProgress();
+    // One object per registered plugin: { <id>: { name, mode, ... }, ... }.
+    JsonObject plugins = doc["plugins"].to<JsonObject>();
+    _pluginManager->buildStatusJson(plugins);
+    // The lyrics card's script reads data.lyrics.* — keep a top-level lyrics
+    // object fed by the plugin's slice for web-UI compatibility.
+    JsonObject lyricsObj = doc["lyrics"].to<JsonObject>();
+    if (Plugin* p = _pluginManager->findById("lyrics")) {
+        p->buildStatusJson(lyricsObj);
+    }
 
     String json;
     serializeJson(doc, json);
     return json;
 }
 
+String WebServer::buildIndexHtml() {
+    String html = index_html;
+
+    // 1. Mode dropdown from the registered plugins (name + mode number).
+    String modeOptions;
+    if (_pluginManager) {
+        for (uint8_t i = 0; i < _pluginManager->count(); i++) {
+            Plugin* p = _pluginManager->at(i);
+            modeOptions += "<option value=\"" + String(p->mode()) + "\">" + p->name() + "</option>\n        ";
+        }
+    }
+    html.replace("%MODE_OPTIONS%", modeOptions);
+
+    // 2. Plugin cards + script blocks.
+    String pluginCards;
+    if (_pluginManager) {
+        for (uint8_t i = 0; i < _pluginManager->count(); i++) {
+            String section = _pluginManager->at(i)->uiSection();
+            if (section.length() > 0) {
+                pluginCards += section;
+                pluginCards += "\n";
+            }
+        }
+    }
+    html.replace("%PLUGIN_CARDS%", pluginCards);
+
+    return html;
+}
+
 void WebServer::setupRoutes() {
-    _server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-        request->send_P(200, "text/html", index_html);
+    _server.on("/", HTTP_GET, [this](AsyncWebServerRequest *request){
+        request->send(200, "text/html", buildIndexHtml());
     });
 
     _server.on("/api/status", HTTP_GET, [this](AsyncWebServerRequest *request){
         request->send(200, "application/json", buildStatusJson());
     });
 
-    // JSON handler for the web dashboard's "Show Test Text" (the app itself
-    // uses form-encoded POSTs to /api/lyrics/line, which parse reliably).
-    auto* lyricsJsonHandler = new AsyncCallbackJsonWebHandler("/api/lyrics/update",
-        [this](AsyncWebServerRequest *request, JsonVariant& json) {
-            JsonObject data = json.as<JsonObject>();
-            String type = data["type"] | "";
-            if (type == "line") {
-                String current = data["current"] | "";
-                if (current.isEmpty()) {
-                    request->send(400, "text/plain", "Missing current lyric line");
-                    return;
-                }
-                String prev = data["prev"] | "";
-                String next = data["next"] | "";
-                uint8_t progress = data["progress"] | 0;
-                _lyricsManager.setLine(current, prev, next, progress);
-                LOG_INFO(TAG, ("Lyric line received via JSON: " + current).c_str());
-            } else if (type == "song") {
-                String artist = data["artist"] | "";
-                String title = data["title"] | "";
-                if (artist.isEmpty() || title.isEmpty()) {
-                    request->send(400, "text/plain", "Missing artist or title");
-                    return;
-                }
-                _lyricsManager.setNowPlaying(artist, title);
-                LOG_INFO(TAG, ("Now playing received via JSON: " + title).c_str());
-            } else {
-                request->send(400, "text/plain", "Unsupported lyrics update");
-                return;
-            }
-            request->send(200, "text/plain", "OK");
-        });
-    _server.addHandler(lyricsJsonHandler);
+    // === Generic plugin API: POST /api/plugin/<id>/<action> ===
+    // Plugin-specific endpoints live under this namespace so core routes stay
+    // stable. (New plugin-specific literal routes can also be registered via
+    // Plugin::registerRoutes, like the frozen /api/lyrics/* endpoints.)
+    _server.on("/api/plugin", HTTP_POST, [this](AsyncWebServerRequest *request){
+        String url = request->url(); // "/api/plugin" or "/api/plugin/..."
+        String rest = (url.length() > 11) ? url.substring(11) : ""; // after "/api/plugin"
+        // rest = "/<id>/<action>"
+        int slash = rest.indexOf('/', 1);
+        if (rest.length() < 3 || rest[0] != '/' || slash < 2) {
+            request->send(400, "text/plain", "Expected /api/plugin/<id>/<action>");
+            return;
+        }
+        String id = rest.substring(1, slash);
+        String action = rest.substring(slash + 1);
+        _pluginManager->dispatchApi(id, action, request);
+    });
+
+    // === Core device routes (unchanged) ===
 
     _server.on("/api/theme", HTTP_POST, [this](AsyncWebServerRequest *request){
         if (request->hasParam("theme", true)) {
             String theme = request->getParam("theme", true)->value();
             _settings.setTheme(theme);
+            if (_pluginManager) _pluginManager->notifyTheme();
             LOG_INFO(TAG, ("Theme saved: " + theme).c_str());
         }
         request->send(200, "text/plain", "OK");
@@ -423,32 +368,6 @@ void WebServer::setupRoutes() {
             _settings.setHeartColor(request->getParam("color", true)->value());
             LOG_INFO(TAG, "Settings saved: Heart color");
         }
-        request->send(200, "text/plain", "OK");
-    });
-
-    _server.on("/api/lyriccolor", HTTP_POST, [this](AsyncWebServerRequest *request){
-        if (request->hasParam("color", true)) {
-            _settings.setLyricColor(request->getParam("color", true)->value());
-            LOG_INFO(TAG, "Settings saved: Lyric color");
-        }
-        request->send(200, "text/plain", "OK");
-    });
-
-    _server.on("/api/lyriceffect", HTTP_POST, [this](AsyncWebServerRequest *request){
-        bool changed = false;
-        if (request->hasParam("glow", true)) {
-            _settings.setLyricGlow(request->getParam("glow", true)->value() == "1");
-            changed = true;
-        }
-        if (request->hasParam("rainbow", true)) {
-            _settings.setLyricRainbow(request->getParam("rainbow", true)->value() == "1");
-            changed = true;
-        }
-        if (request->hasParam("full", true)) {
-            _settings.setLyricFull(request->getParam("full", true)->value() == "1");
-            changed = true;
-        }
-        if (changed) LOG_INFO(TAG, "Settings saved: Lyric effects");
         request->send(200, "text/plain", "OK");
     });
 
@@ -558,6 +477,7 @@ void WebServer::setupRoutes() {
         if (request->hasParam("rotation", true)) {
             uint8_t rot = request->getParam("rotation", true)->value().toInt();
             _settings.setRotation(rot);
+            if (_pluginManager) _pluginManager->notifyRotation();
             LOG_INFO(TAG, "Settings saved: Orientation");
         }
         request->send(200, "text/plain", "OK");
@@ -592,61 +512,11 @@ void WebServer::setupRoutes() {
         ESP.restart();
     });
 
-    // === Lyrics API Endpoints (for Android app) ===
-
-    _server.on("/api/lyrics/line", HTTP_POST, [this](AsyncWebServerRequest *request){
-        if (!request->hasParam("current", true)) {
-            LOG_ERROR(TAG, "Lyrics line request missing current parameter");
-            request->send(400, "text/plain", "Missing current lyric line");
-            return;
+    // Plugins register their own literal routes (frozen endpoints etc.) last
+    // so they win over any future core route on the same path.
+    if (_pluginManager) {
+        for (uint8_t i = 0; i < _pluginManager->count(); i++) {
+            _pluginManager->at(i)->registerRoutes(_server);
         }
-        String current = request->getParam("current", true)->value();
-        String prev = request->hasParam("prev", true) ? request->getParam("prev", true)->value() : "";
-        String next = request->hasParam("next", true) ? request->getParam("next", true)->value() : "";
-        uint8_t prog = request->hasParam("progress", true) ? (uint8_t)request->getParam("progress", true)->value().toInt() : 0;
-        uint32_t posSec = request->hasParam("pos", true) ? (uint32_t)request->getParam("pos", true)->value().toInt() : 0;
-        uint32_t durSec = request->hasParam("dur", true) ? (uint32_t)request->getParam("dur", true)->value().toInt() : 0;
-        _lyricsManager.setLine(current, prev, next, prog, posSec, durSec);
-        LOG_INFO(TAG, ("Lyric line received: " + current).c_str());
-        request->send(200, "text/plain", "OK");
-    });
-
-    _server.on("/api/lyrics/nowplaying", HTTP_POST, [this](AsyncWebServerRequest *request){
-        if (request->hasParam("artist", true) && request->hasParam("title", true)) {
-            String artist = request->getParam("artist", true)->value();
-            String title = request->getParam("title", true)->value();
-            _lyricsManager.setNowPlaying(artist, title);
-            LOG_INFO(TAG, ("Now Playing from app: " + title + " - " + artist).c_str());
-        }
-        request->send(200, "text/plain", "OK");
-    });
-
-    _server.on("/api/lyrics/clear", HTTP_POST, [this](AsyncWebServerRequest *request){
-        _lyricsManager.clear();
-        LOG_INFO(TAG, "Lyrics cleared");
-        request->send(200, "text/plain", "OK");
-    });
-
-    _server.on("/api/lyrics/stop", HTTP_POST, [this](AsyncWebServerRequest *request){
-        _lyricsManager.stop();
-        LOG_INFO(TAG, "Lyrics stopped");
-        request->send(200, "text/plain", "OK");
-    });
-
-    _server.on("/api/lyrics/ping", HTTP_POST, [this](AsyncWebServerRequest *request){
-        _lyricsManager.setPhoneConnected(true);
-        LOG_INFO(TAG, "Phone ping received");
-        request->send(200, "text/plain", "OK");
-    });
-
-    _server.on("/api/lyrics/test", HTTP_POST, [this](AsyncWebServerRequest *request){
-        if (!request->hasParam("text", true)) {
-            request->send(400, "text/plain", "Missing text");
-            return;
-        }
-        String text = request->getParam("text", true)->value();
-        _lyricsManager.setLine(text);
-        LOG_INFO(TAG, ("Display test text received: " + text).c_str());
-        request->send(200, "text/plain", "Displayed");
-    });
+    }
 }

@@ -14,6 +14,12 @@ public:
     bool isTimeSynced() const;
     String getFormattedTime() const;
     String getFormattedDate() const;
+    // Compact forms for the portrait clock: "HH:MM" and "01 Jan 2024". The
+    // full-width forms ("HH:MM:SS", "Mon, Jan 01 2024") overflow the 240px
+    // portrait width at the sizes that layout needs, so the portrait screen
+    // uses these instead.
+    String getFormattedTimeShort() const;
+    String getFormattedDateShort() const;
 
 private:
     bool _isSynced;

@@ -78,6 +78,37 @@ public:
     bool getLyricFull();
     void setLyricFull(bool enabled);
 
+    // Instagram-style edge-fade gradient across the current lyric line.
+    bool getLyricGradient();
+    void setLyricGradient(bool enabled);
+
+    // Which sport the Scores plugin displays ("cricket" or "football"),
+    // persisted so the plugin comes back on the same sport after a reboot.
+    String getScoreSport();
+    void setScoreSport(const String& sport);
+
+    // --- Live football scores (ESPN's unofficial soccer scoreboard) ---
+    // A league slug (for example "eng.1") is required.  An empty event ID
+    // selects ESPN's live match, then the next scheduled match; a non-empty ID
+    // pins the display to one match from that league.
+    String getFootballLeagueSlug();
+    void setFootballLeagueSlug(const String& slug);
+    String getFootballEventId();
+    void setFootballEventId(const String& id);
+    String getFootballDate(); // empty = ESPN's current scoreboard; YYYYMMDD = matchday
+    void setFootballDate(const String& date);
+    uint16_t getFootballPollSeconds();
+    void setFootballPollSeconds(uint16_t seconds);
+
+    uint16_t getCricketLeagueId();
+    void setCricketLeagueId(uint16_t id);
+    String getCricketEventId();
+    void setCricketEventId(const String& id);
+    String getCricketDate();
+    void setCricketDate(const String& date);
+    uint16_t getCricketPollSeconds();
+    void setCricketPollSeconds(uint16_t seconds);
+
     // Default values
     static constexpr const char* DEFAULT_LATITUDE = "28.61";
     static constexpr const char* DEFAULT_LONGITUDE = "77.20";
@@ -101,6 +132,16 @@ private:
     bool _lyricGlow;
     bool _lyricRainbow;
     bool _lyricFull;
+    bool _lyricGradient;
+    String _scoreSport;
+    String _footballLeagueSlug;
+    String _footballEventId;
+    String _footballDate;
+    uint16_t _footballPollSeconds;
+    uint16_t _cricketLeagueId;
+    String _cricketEventId;
+    String _cricketDate;
+    uint16_t _cricketPollSeconds;
     uint8_t _displayMode;
     uint8_t _rotation;
     uint32_t _slideshowInterval;

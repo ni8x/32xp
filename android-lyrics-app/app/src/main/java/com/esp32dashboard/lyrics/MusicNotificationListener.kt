@@ -28,6 +28,9 @@ class MusicNotificationListener : NotificationListenerService() {
             "app.revanced.android.apps.youtube.music",     // YT Music ReVanced
             "app.rvx.android.apps.youtube.music",          // YT Music ReVanced Extended
             "com.vanced.android.apps.youtube.music",       // YT Music Vanced (legacy)
+            // MetroList (open-source YouTube Music client)
+            "com.metrolist.music",                          // MetroList
+            "com.metrolist.music.mainactivitystatic",       // MetroList (alternate package)
             // YouTube family
             "com.google.android.youtube",                   // Official YouTube
             "app.morphe.android.youtube",                   // YouTube (Morpheus fork)

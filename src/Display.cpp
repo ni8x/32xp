@@ -162,7 +162,10 @@ void Display::drawCenteredTextAt(int16_t y, const char* text, uint16_t color, ui
     uint16_t w, h;
     _gfx->setTextSize(size);
     _gfx->getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
-    int16_t x = (_gfx->width() - w) / 2;
+    // getTextBounds reports the ink box (x1 .. x1+w-1). Center THAT box, not
+    // just its width: glyphs with a left bearing (narrow glyphs like '1' and
+    // ':' in unifont) otherwise push the text off-center.
+    int16_t x = (_gfx->width() - w) / 2 - x1;
     drawText(x, y, text, color, size);
 }
 
@@ -213,6 +216,28 @@ uint16_t Display::dimColor(uint16_t color, uint8_t level) {
         color = (color >> 1) & 0x7BEF;
     }
     return color;
+}
+
+uint16_t Display::scaleColor(uint16_t color, uint8_t factor) {
+    // Linear brightness scale in RGB565. Splitting the channels loses the low
+    // bits, but at these resolutions the result is visually smooth.
+    uint16_t r = (color >> 11) & 0x1F;
+    uint16_t g = (color >> 5) & 0x3F;
+    uint16_t b = color & 0x1F;
+    r = (uint16_t)((r * factor) / 255);
+    g = (uint16_t)((g * factor) / 255);
+    b = (uint16_t)((b * factor) / 255);
+    return (uint16_t)((r << 11) | (g << 5) | b);
+}
+
+uint16_t Display::gradientBrightness(int16_t gc, int16_t lineX, int16_t lineW, uint8_t edgeFactor) {
+    if (lineW <= 0) return 255;
+    const int16_t half = lineW / 2;
+    if (half == 0) return 255;
+    int16_t dist = gc - (lineX + half);
+    if (dist < 0) dist = -dist;
+    if (dist > half) dist = half;
+    return (uint16_t)(255 - (int32_t)(255 - edgeFactor) * dist / half);
 }
 
 uint16_t Display::hueToRGB565(uint8_t hue) {
@@ -285,9 +310,64 @@ void Display::drawRainbowText(int16_t x, int16_t y, const char* text, uint8_t si
     }
 }
 
+void Display::drawGradientText(int16_t x, int16_t y, const char* text, uint8_t size,
+                               uint16_t color, int16_t lineW, uint8_t edgeFactor,
+                               uint8_t dimLevel, bool rainbow, uint8_t hueBase) {
+    if (!_gfx || !text) return;
+    if (ScriptShaping::containsShapedScript(text)) {
+        // Should not happen: shaped text is handled by drawCenteredTextEffect.
+        drawShapedText(x, y, text, scaleColor(color, edgeFactor), size);
+        return;
+    }
+
+    // Plain path: walk codepoints, shading each glyph by its distance from the
+    // line centre (bright core fading toward the ends).
+    _gfx->setTextSize(size);
+    int16_t cx = x;
+    size_t i = 0, gi = 0;
+    const size_t len = strlen(text);
+    while (i < len) {
+        uint8_t b = (uint8_t)text[i];
+        size_t cpLen = 1;
+        uint32_t cp = (uint8_t)text[i];
+        if (b >= 0xF0) {
+            cpLen = 4;
+            cp = ((uint32_t)((uint8_t)text[i] & 0x07) << 18) |
+                 ((uint32_t)((uint8_t)text[i+1] & 0x3F) << 12) |
+                 ((uint32_t)((uint8_t)text[i+2] & 0x3F) << 6) |
+                 ((uint32_t)((uint8_t)text[i+3] & 0x3F));
+        } else if (b >= 0xE0) {
+            cpLen = 3;
+            cp = ((uint32_t)((uint8_t)text[i] & 0x0F) << 12) |
+                 ((uint32_t)((uint8_t)text[i+1] & 0x3F) << 6) |
+                 ((uint32_t)((uint8_t)text[i+2] & 0x3F));
+        } else if (b >= 0xC0) {
+            cpLen = 2;
+            cp = ((uint32_t)((uint8_t)text[i] & 0x1F) << 6) |
+                 ((uint32_t)((uint8_t)text[i+1] & 0x3F));
+        }
+
+        int16_t adv = glyphAdvance(cp) * size;
+        int16_t gc = cx + adv / 2; // glyph centre, for the edge fade
+        uint16_t c = rainbow ? hueToRGB565(hueBase + (uint8_t)(gi * 22)) : color;
+        c = scaleColor(c, (uint8_t)gradientBrightness(gc, x, lineW, edgeFactor));
+        if (dimLevel) c = dimColor(c, dimLevel);
+        char g[5];
+        memcpy(g, text + i, cpLen);
+        g[cpLen] = '\0';
+        _gfx->setTextColor(c);
+        _gfx->setCursor(cx, y);
+        _gfx->print(g);
+        cx += adv;
+        i += cpLen;
+        gi++;
+    }
+}
+
 void Display::drawCenteredTextEffect(int16_t y, const char* text, uint16_t color, uint8_t size,
                                      bool glow, bool rainbow, uint8_t hueBase,
-                                     int16_t* outX, int16_t* outW, uint8_t glowDimOffset) {
+                                     int16_t* outX, int16_t* outW, uint8_t glowDimOffset,
+                                     bool gradient) {
     if (!_gfx || !text || strlen(text) == 0) {
         if (outX) *outX = 0;
         if (outW) *outW = 0;
@@ -321,23 +401,28 @@ void Display::drawCenteredTextEffect(int16_t y, const char* text, uint16_t color
         if (nItems == 0) return;
     }
 
+    // Edge-fade gradient: shade glyphs brighter at the line centre and dimmer
+    // toward the two ends (Instagram-style fade). ~35% brightness at the ends.
+    static constexpr uint8_t GRADIENT_EDGE = 90;
+
     // One full render pass of the text at a pixel offset with a dim level
-    // (0 = full brightness). Rainbow colors per glyph; glow dims everything.
+    // (0 = full brightness). Rainbow colors per glyph; gradient fades the ends;
+    // glow dims everything.
     auto renderPass = [&](int16_t ox, int16_t oy, uint8_t dimLevel) {
         int16_t px = x + ox, py = y + oy;
         if (shaped) {
-            if (rainbow) {
-                for (size_t i = 0; i < nItems; i++) {
-                    uint16_t c = hueToRGB565(hueBase + (uint8_t)(i * 22));
-                    if (dimLevel) c = dimColor(c, dimLevel);
-                    drawGlyph(px + items[i].x * size, py, items[i].codepoint, c, size);
+            for (size_t i = 0; i < nItems; i++) {
+                uint16_t c = rainbow ? hueToRGB565(hueBase + (uint8_t)(i * 22)) : color;
+                if (gradient) {
+                    int16_t gc = px + items[i].x * size +
+                                 (glyphAdvance(items[i].codepoint) * size) / 2;
+                    c = scaleColor(c, (uint8_t)gradientBrightness(gc, x, w, GRADIENT_EDGE));
                 }
-            } else {
-                uint16_t c = dimLevel ? dimColor(color, dimLevel) : color;
-                for (size_t i = 0; i < nItems; i++) {
-                    drawGlyph(px + items[i].x * size, py, items[i].codepoint, c, size);
-                }
+                if (dimLevel) c = dimColor(c, dimLevel);
+                drawGlyph(px + items[i].x * size, py, items[i].codepoint, c, size);
             }
+        } else if (gradient) {
+            drawGradientText(px, py, text, size, color, w, GRADIENT_EDGE, dimLevel, rainbow, hueBase);
         } else if (rainbow) {
             drawRainbowText(px, py, text, size, hueBase, dimLevel);
         } else {

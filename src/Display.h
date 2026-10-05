@@ -31,13 +31,21 @@ public:
     // is not included) so callers can erase exactly that region between frames.
     // glowDimOffset adds extra dimming to every halo ring (e.g. 1 = 25% instead
     // of 50% on the innermost ring) for busy screens where a strong glow blinds.
+    // gradient applies an Instagram-style edge fade: each glyph is brightened
+    // toward the centre of the line and dimmed toward its two ends (combinable
+    // with rainbow, which supplies the per-glyph hue).
     void drawCenteredTextEffect(int16_t y, const char* text, uint16_t color, uint8_t size,
                                 bool glow, bool rainbow, uint8_t hueBase,
                                 int16_t* outX = nullptr, int16_t* outW = nullptr,
-                                uint8_t glowDimOffset = 0);
+                                uint8_t glowDimOffset = 0, bool gradient = false);
 
     // HSV hue (0..255) -> RGB565 (rainbow wheel)
     static uint16_t hueToRGB565(uint8_t hue);
+
+    // Linear brightness scale in RGB565 (factor 0 = black, 255 = unchanged).
+    // Used by the gradient fade to shade glyphs without banding between the
+    // coarse 50%-per-level dimColor() steps.
+    static uint16_t scaleColor(uint16_t color, uint8_t factor);
 
     // UTF-8 aware text measurement & fitting (pixel-based, never splits a codepoint)
     uint16_t measureText(const char* text, uint8_t size = 1);
@@ -87,6 +95,18 @@ private:
 
     // ~50%^level brightness of an RGB565 color (level 1 = half, 2 = quarter...).
     uint16_t dimColor(uint16_t color, uint8_t level = 1);
+
+    // Per-glyph edge-fade render: glyph i is shaded by its horizontal distance
+    // from the line centre (bright centre -> dim edges). rainbow supplies a
+    // per-glyph hue; dimLevel applies the usual glow/step dimming on top.
+    void drawGradientText(int16_t x, int16_t y, const char* text, uint8_t size,
+                          uint16_t color, int16_t lineW, uint8_t edgeFactor,
+                          uint8_t dimLevel, bool rainbow, uint8_t hueBase);
+
+    // Brightness (0..255) for a glyph centred at gc within a line spanning
+    // [lineX, lineX+lineW]: 255 at the centre falling to edgeFactor at the ends.
+    static uint16_t gradientBrightness(int16_t gc, int16_t lineX, int16_t lineW,
+                                       uint8_t edgeFactor);
 
     Arduino_DataBus* _bus;
     Arduino_GFX* _gfx;

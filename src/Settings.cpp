@@ -38,6 +38,16 @@ Settings::Settings()
       _lyricGlow(false),
       _lyricRainbow(false),
       _lyricFull(false),
+      _lyricGradient(false),
+      _scoreSport("cricket"),
+      _footballLeagueSlug("eng.1"),
+      _footballEventId(),
+      _footballDate(),
+      _footballPollSeconds(30),
+      _cricketLeagueId(8048),
+      _cricketEventId(),
+      _cricketDate(),
+      _cricketPollSeconds(30),
       _displayMode(0),
       _rotation(Config::DEFAULT_ROTATION),
       _slideshowInterval(5),
@@ -81,6 +91,22 @@ void Settings::init() {
     _lyricGlow = _preferences.getBool("lyricGlow", false);
     _lyricRainbow = _preferences.getBool("lyricRainbow", false);
     _lyricFull = _preferences.getBool("lyricFull", false);
+    _lyricGradient = _preferences.getBool("lyricGradient", false);
+    // Clamp to a known sport so a stale/corrupt NVS value can't blank the screen.
+    _scoreSport = _preferences.getString("scoreSport", "cricket");
+    if (_scoreSport != "cricket" && _scoreSport != "football") _scoreSport = "cricket";
+    _footballLeagueSlug = _preferences.getString("espnLeague", "eng.1");
+    _footballEventId = _preferences.getString("espnEvent", "");
+    _footballDate = _preferences.getString("espnDate", "");
+    _footballPollSeconds = _preferences.getUShort("espnPollSec", 30);
+    if (_footballPollSeconds < 30) _footballPollSeconds = 30;
+    if (_footballPollSeconds > 3600) _footballPollSeconds = 3600;
+    _cricketLeagueId = _preferences.getUShort("cricLeague", 8048);
+    _cricketEventId = _preferences.getString("cricEvent", "");
+    _cricketDate = _preferences.getString("cricDate", "");
+    _cricketPollSeconds = _preferences.getUShort("cricPollSec", 30);
+    if (_cricketPollSeconds < 30) _cricketPollSeconds = 30;
+    if (_cricketPollSeconds > 3600) _cricketPollSeconds = 3600;
     _displayMode = _preferences.getUChar("mode", 0);
     _rotation = _preferences.getUChar("rotation", Config::DEFAULT_ROTATION);
     if (_rotation > 3) _rotation = 3;
@@ -277,6 +303,79 @@ void Settings::setLyricFull(bool enabled) {
     }
 }
 
+bool Settings::getLyricGradient() {
+    return _lyricGradient;
+}
+
+void Settings::setLyricGradient(bool enabled) {
+    _lyricGradient = enabled;
+    if (_initialized) {
+        _preferences.putBool("lyricGradient", _lyricGradient);
+    }
+}
+
+String Settings::getScoreSport() {
+    return _scoreSport;
+}
+
+void Settings::setScoreSport(const String& sport) {
+    // Only accept the two sports the Scores plugin knows about.
+    if (sport != "cricket" && sport != "football") return;
+    _scoreSport = sport;
+    if (_initialized) {
+        _preferences.putString("scoreSport", _scoreSport);
+    }
+}
+
+String Settings::getFootballLeagueSlug() { return _footballLeagueSlug; }
+
+void Settings::setFootballLeagueSlug(const String& slug) {
+    if (slug.isEmpty() || slug.length() > 48) return;
+    _footballLeagueSlug = slug;
+    if (_initialized) _preferences.putString("espnLeague", _footballLeagueSlug);
+}
+
+String Settings::getFootballEventId() { return _footballEventId; }
+
+void Settings::setFootballEventId(const String& id) {
+    if (id.length() > 32) return;
+    _footballEventId = id;
+    if (_initialized) _preferences.putString("espnEvent", _footballEventId);
+}
+
+String Settings::getFootballDate() { return _footballDate; }
+
+void Settings::setFootballDate(const String& date) {
+    String digits;
+    for (size_t i = 0; i < date.length(); ++i) {
+        if (date[i] >= '0' && date[i] <= '9') digits += date[i];
+    }
+    if (!digits.isEmpty() && digits.length() != 8) return;
+    _footballDate = digits;
+    if (_initialized) _preferences.putString("espnDate", _footballDate);
+}
+
+uint16_t Settings::getFootballPollSeconds() { return _footballPollSeconds; }
+
+void Settings::setFootballPollSeconds(uint16_t seconds) {
+    if (seconds < 30) seconds = 30;
+    if (seconds > 3600) seconds = 3600;
+    _footballPollSeconds = seconds;
+    if (_initialized) _preferences.putUShort("espnPollSec", _footballPollSeconds);
+}
+
+uint16_t Settings::getCricketLeagueId() { return _cricketLeagueId; }
+void Settings::setCricketLeagueId(uint16_t id) { if (!id) return; _cricketLeagueId=id; if (_initialized) _preferences.putUShort("cricLeague", id); }
+String Settings::getCricketEventId() { return _cricketEventId; }
+void Settings::setCricketEventId(const String& id) { if (id.length()>32) return; _cricketEventId=id; if (_initialized) _preferences.putString("cricEvent", id); }
+String Settings::getCricketDate() { return _cricketDate; }
+void Settings::setCricketDate(const String& date) {
+    String digits; for (size_t i=0;i<date.length();++i) if (date[i]>='0' && date[i]<='9') digits+=date[i];
+    if (!digits.isEmpty() && digits.length()!=8) return; _cricketDate=digits; if (_initialized) _preferences.putString("cricDate", digits);
+}
+uint16_t Settings::getCricketPollSeconds() { return _cricketPollSeconds; }
+void Settings::setCricketPollSeconds(uint16_t seconds) { if(seconds<30) seconds=30; if(seconds>3600) seconds=3600; _cricketPollSeconds=seconds; if(_initialized) _preferences.putUShort("cricPollSec", seconds); }
+
 void Settings::clearAll() {
     if (_initialized) {
         _preferences.clear();
@@ -293,6 +392,16 @@ void Settings::clearAll() {
         _lyricGlow = false;
         _lyricRainbow = false;
         _lyricFull = false;
+        _lyricGradient = false;
+        _scoreSport = "cricket";
+        _footballLeagueSlug = "eng.1";
+        _footballEventId = "";
+        _footballDate = "";
+        _footballPollSeconds = 30;
+        _cricketLeagueId = 8048;
+        _cricketEventId = "";
+        _cricketDate = "";
+        _cricketPollSeconds = 30;
         _displayMode = 0;
         _rotation = Config::DEFAULT_ROTATION;
         _slideshowInterval = 5;

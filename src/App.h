@@ -8,6 +8,11 @@
 #include "WeatherManager.h"
 #include "MediaManager.h"
 #include "LyricsManager.h"
+#include "plugins/PluginManager.h"
+#include "plugins/ClockPlugin.h"
+#include "plugins/MediaPlugin.h"
+#include "plugins/LyricsPlugin.h"
+#include "plugins/ScorePlugin.h"
 
 class App {
 public:
@@ -16,6 +21,15 @@ public:
 
     void init();
     void update();
+
+    // Called by ClockPlugin (mode 0). invalidateClockScreen forces a full
+    // clock/default-screen repaint (rotation/theme change, mode re-entry);
+    // runClockTick is the per-loop render tick (clock once per second when
+    // time is synced, otherwise the default dashboard). Set
+    // forceDefaultRedraw to repaint the default screen immediately even if
+    // the Wi-Fi status string did not change.
+    void invalidateClockScreen();
+    void runClockTick(bool forceDefaultRedraw = false);
 
 private:
     Settings _settings;
@@ -26,6 +40,13 @@ private:
     TimeManager _timeManager;
     WeatherManager _weatherManager;
     LyricsManager _lyricsManager;
+
+    // Plugin system: one plugin per screen mode, registered in init().
+    PluginManager _pluginManager;
+    ClockPlugin _clockPlugin;
+    MediaPlugin _mediaPlugin;
+    LyricsPlugin _lyricsPlugin;
+    ScorePlugin _scorePlugin;
 
     bool _wasWifiConnected;
     bool _wasTimeSynced;
@@ -41,28 +62,8 @@ private:
     uint8_t _lastClockTimeSize;
     int16_t _lastClockTimeY;
     uint16_t _lastHeartColor; // heart redraws when the user changes it via web
-    String _lastLyricLine;
-    String _lastLyricColor;
-    bool _lastLyricGlow;
-    bool _lastLyricRainbow;
-    bool _lastLyricFull;
-    uint32_t _lastLyricDraw;
-    uint8_t _lastLyricProgress;
-    // Bounding box of the drawn current line; the animation tick erases only
-    // this region so the rest of the screen never flickers.
-    int16_t _lastCurrX;
-    int16_t _lastCurrY;
-    int16_t _lastCurrW;
-    int16_t _lastCurrH;
-    // Widths of the last drawn timestamp readouts (for the per-second partial tick).
-    int16_t _lastTsLW;
-    int16_t _lastTsRW;
-    bool _lastLyricActive;
-    bool _lastPhoneConnected;
-    String _lastLyricTitle;
     uint8_t _lastBrightness;
 
     void drawDefaultScreen();
     void drawClockScreen();
-    void drawLyricsScreen();
 };

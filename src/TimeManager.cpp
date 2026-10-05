@@ -66,3 +66,29 @@ String TimeManager::getFormattedDate() const {
     strftime(dateStringBuff, sizeof(dateStringBuff), "%a, %b %d %Y", &timeinfo);
     return String(dateStringBuff);
 }
+
+String TimeManager::getFormattedTimeShort() const {
+    if (!_isSynced) return "--:--";
+    
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo)) {
+        return "--:--";
+    }
+    
+    char timeStringBuff[16]; // e.g. "23:59"
+    strftime(timeStringBuff, sizeof(timeStringBuff), "%H:%M", &timeinfo);
+    return String(timeStringBuff);
+}
+
+String TimeManager::getFormattedDateShort() const {
+    if (!_isSynced) return "----/--/--";
+    
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo)) {
+        return "----/--/--";
+    }
+    
+    char dateStringBuff[32]; // e.g. "01 Jan 2024"
+    strftime(dateStringBuff, sizeof(dateStringBuff), "%d %b %Y", &timeinfo);
+    return String(dateStringBuff);
+}
