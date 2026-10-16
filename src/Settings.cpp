@@ -29,8 +29,7 @@ Settings::Settings()
       _wifiSSID(),
       _wifiPassword(),
       _clockText(),
-      _latitude(DEFAULT_LATITUDE),
-      _longitude(DEFAULT_LONGITUDE),
+      _clockStyle(DEFAULT_CLOCK_STYLE),
       _theme("default"),
       _heartColor(DEFAULT_HEART_COLOR),
       _heartColorSet(false),
@@ -39,6 +38,8 @@ Settings::Settings()
       _lyricRainbow(false),
       _lyricFull(false),
       _lyricGradient(false),
+      _lyricScroll(true),
+      _lyricFullSize(DEFAULT_LYRIC_FULL_SIZE),
       _scoreSport("cricket"),
       _footballLeagueSlug("eng.1"),
       _footballEventId(),
@@ -73,8 +74,7 @@ void Settings::init() {
     _wifiSSID = _preferences.getString("ssid", "");
     _wifiPassword = _preferences.getString("password", "");
     _clockText = _preferences.getString("clockText", "");
-    _latitude = _preferences.getString("lat", DEFAULT_LATITUDE);
-    _longitude = _preferences.getString("lon", DEFAULT_LONGITUDE);
+    _clockStyle = _preferences.getString("clockStyle", DEFAULT_CLOCK_STYLE);
     // Clamp to a known theme; an unknown stored value falls back to default
     // without touching the colors (only an explicit /api/theme change does).
     String storedTheme = _preferences.getString("theme", "default");
@@ -92,6 +92,12 @@ void Settings::init() {
     _lyricRainbow = _preferences.getBool("lyricRainbow", false);
     _lyricFull = _preferences.getBool("lyricFull", false);
     _lyricGradient = _preferences.getBool("lyricGradient", false);
+    // Defaults on: the transition is what makes a line advance readable at a
+    // glance, and existing devices (no stored key) should get it.
+    _lyricScroll = _preferences.getBool("lyricScroll", true);
+    _lyricFullSize = _preferences.getUChar("lyricFullSize", DEFAULT_LYRIC_FULL_SIZE);
+    if (_lyricFullSize < 1) _lyricFullSize = 1;
+    if (_lyricFullSize > LYRIC_FULL_SIZE_MAX) _lyricFullSize = LYRIC_FULL_SIZE_MAX;
     // Clamp to a known sport so a stale/corrupt NVS value can't blank the screen.
     _scoreSport = _preferences.getString("scoreSport", "cricket");
     if (_scoreSport != "cricket" && _scoreSport != "football") _scoreSport = "cricket";
@@ -101,7 +107,7 @@ void Settings::init() {
     _footballPollSeconds = _preferences.getUShort("espnPollSec", 30);
     if (_footballPollSeconds < 30) _footballPollSeconds = 30;
     if (_footballPollSeconds > 3600) _footballPollSeconds = 3600;
-    _cricketLeagueId = _preferences.getUShort("cricLeague", 8048);
+    _cricketLeagueId = _preferences.getULong("cricLeague", 8048);
     _cricketEventId = _preferences.getString("cricEvent", "");
     _cricketDate = _preferences.getString("cricDate", "");
     _cricketPollSeconds = _preferences.getUShort("cricPollSec", 30);
@@ -159,25 +165,19 @@ void Settings::setClockText(const String& text) {
     }
 }
 
-String Settings::getLatitude() {
-    return _latitude;
+String Settings::getClockStyle() {
+    return _clockStyle;
 }
 
-void Settings::setLatitude(const String& lat) {
-    _latitude = lat;
-    if (_initialized) {
-        _preferences.putString("lat", _latitude);
+void Settings::setClockStyle(const String& style) {
+    // Accept only known faces so a bad POST can never leave the clock blank.
+    if (style != "digital" && style != "analogue" && style != "8bit" &&
+        style != "anime" && style != "minimal") {
+        return;
     }
-}
-
-String Settings::getLongitude() {
-    return _longitude;
-}
-
-void Settings::setLongitude(const String& lon) {
-    _longitude = lon;
+    _clockStyle = style;
     if (_initialized) {
-        _preferences.putString("lon", _longitude);
+        _preferences.putString("clockStyle", _clockStyle);
     }
 }
 
@@ -314,6 +314,30 @@ void Settings::setLyricGradient(bool enabled) {
     }
 }
 
+bool Settings::getLyricScroll() {
+    return _lyricScroll;
+}
+
+void Settings::setLyricScroll(bool enabled) {
+    _lyricScroll = enabled;
+    if (_initialized) {
+        _preferences.putBool("lyricScroll", _lyricScroll);
+    }
+}
+
+uint8_t Settings::getLyricFullSize() {
+    return _lyricFullSize;
+}
+
+void Settings::setLyricFullSize(uint8_t size) {
+    if (size < 1) size = 1;
+    if (size > LYRIC_FULL_SIZE_MAX) size = LYRIC_FULL_SIZE_MAX;
+    _lyricFullSize = size;
+    if (_initialized) {
+        _preferences.putUChar("lyricFullSize", _lyricFullSize);
+    }
+}
+
 String Settings::getScoreSport() {
     return _scoreSport;
 }
@@ -364,8 +388,8 @@ void Settings::setFootballPollSeconds(uint16_t seconds) {
     if (_initialized) _preferences.putUShort("espnPollSec", _footballPollSeconds);
 }
 
-uint16_t Settings::getCricketLeagueId() { return _cricketLeagueId; }
-void Settings::setCricketLeagueId(uint16_t id) { if (!id) return; _cricketLeagueId=id; if (_initialized) _preferences.putUShort("cricLeague", id); }
+uint32_t Settings::getCricketLeagueId() { return _cricketLeagueId; }
+void Settings::setCricketLeagueId(uint32_t id) { if (!id) return; _cricketLeagueId=id; if (_initialized) _preferences.putULong("cricLeague", id); }
 String Settings::getCricketEventId() { return _cricketEventId; }
 void Settings::setCricketEventId(const String& id) { if (id.length()>32) return; _cricketEventId=id; if (_initialized) _preferences.putString("cricEvent", id); }
 String Settings::getCricketDate() { return _cricketDate; }
@@ -383,8 +407,7 @@ void Settings::clearAll() {
         _wifiPassword = "";
         _brightness = Config::DEFAULT_BRIGHTNESS;
         _clockText = "";
-        _latitude = DEFAULT_LATITUDE;
-        _longitude = DEFAULT_LONGITUDE;
+        _clockStyle = DEFAULT_CLOCK_STYLE;
         _theme = "default";
         _heartColor = DEFAULT_HEART_COLOR;
         _heartColorSet = false;
@@ -393,6 +416,8 @@ void Settings::clearAll() {
         _lyricRainbow = false;
         _lyricFull = false;
         _lyricGradient = false;
+        _lyricScroll = true;
+        _lyricFullSize = DEFAULT_LYRIC_FULL_SIZE;
         _scoreSport = "cricket";
         _footballLeagueSlug = "eng.1";
         _footballEventId = "";

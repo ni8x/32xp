@@ -22,11 +22,10 @@ public:
     String getClockText();
     void setClockText(const String& text);
 
-    String getLatitude();
-    void setLatitude(const String& lat);
-
-    String getLongitude();
-    void setLongitude(const String& lon);
+    // Clock face style: "digital" (default), "analogue", "8bit", "anime",
+    // "minimal". Unknown values fall back to the digital face.
+    String getClockStyle();
+    void setClockStyle(const String& style);
 
     uint8_t getDisplayMode();
     void setDisplayMode(uint8_t mode);
@@ -82,6 +81,16 @@ public:
     bool getLyricGradient();
     void setLyricGradient(bool enabled);
 
+    // Scroll-up transition: when the lyric advances, the prev/current/next rows
+    // slide up by one row instead of snapping to the new line.
+    bool getLyricScroll();
+    void setLyricScroll(bool enabled);
+
+    // Preferred font-size cap for full-screen lyrics (1..LYRIC_FULL_SIZE_MAX).
+    // The renderer still steps down automatically when a line is too wide/tall.
+    uint8_t getLyricFullSize();
+    void setLyricFullSize(uint8_t size);
+
     // Which sport the Scores plugin displays ("cricket" or "football"),
     // persisted so the plugin comes back on the same sport after a reboot.
     String getScoreSport();
@@ -100,8 +109,8 @@ public:
     uint16_t getFootballPollSeconds();
     void setFootballPollSeconds(uint16_t seconds);
 
-    uint16_t getCricketLeagueId();
-    void setCricketLeagueId(uint16_t id);
+    uint32_t getCricketLeagueId();
+    void setCricketLeagueId(uint32_t id);
     String getCricketEventId();
     void setCricketEventId(const String& id);
     String getCricketDate();
@@ -110,10 +119,11 @@ public:
     void setCricketPollSeconds(uint16_t seconds);
 
     // Default values
-    static constexpr const char* DEFAULT_LATITUDE = "28.61";
-    static constexpr const char* DEFAULT_LONGITUDE = "77.20";
     static constexpr const char* DEFAULT_HEART_COLOR = "#00d2ff";
     static constexpr const char* DEFAULT_LYRIC_COLOR = "#00ffff"; // cyan
+    static constexpr uint8_t DEFAULT_LYRIC_FULL_SIZE = 5;
+    static constexpr uint8_t LYRIC_FULL_SIZE_MAX = 8;
+    static constexpr const char* DEFAULT_CLOCK_STYLE = "digital";
 
     void clearAll();
     
@@ -123,8 +133,7 @@ private:
     String _wifiSSID;
     String _wifiPassword;
     String _clockText;
-    String _latitude;
-    String _longitude;
+    String _clockStyle;
     String _theme;
     String _heartColor;
     bool _heartColorSet;
@@ -133,12 +142,14 @@ private:
     bool _lyricRainbow;
     bool _lyricFull;
     bool _lyricGradient;
+    bool _lyricScroll;
+    uint8_t _lyricFullSize;
     String _scoreSport;
     String _footballLeagueSlug;
     String _footballEventId;
     String _footballDate;
     uint16_t _footballPollSeconds;
-    uint16_t _cricketLeagueId;
+    uint32_t _cricketLeagueId;
     String _cricketEventId;
     String _cricketDate;
     uint16_t _cricketPollSeconds;

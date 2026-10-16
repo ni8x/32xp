@@ -9,6 +9,13 @@ void PluginManager::registerPlugin(Plugin* plugin) {
         LOG_ERROR(TAG, "Plugin registration failed (null or full)");
         return;
     }
+    // Once beginAll() has run, begin() has already been fanned out: a late
+    // plugin would miss it (and the boot-time registerRoutes() pass) while
+    // still being reachable for dispatch. Refuse instead of half-wiring it.
+    if (_begun) {
+        LOG_ERROR(TAG, "Plugin registration failed (table closed after beginAll)");
+        return;
+    }
     // Mode/id collisions would make dispatch ambiguous; refuse duplicates.
     for (uint8_t i = 0; i < _count; i++) {
         if (_plugins[i]->mode() == plugin->mode()) {
@@ -39,6 +46,7 @@ Plugin* PluginManager::findById(const char* id) const {
 }
 
 void PluginManager::beginAll() {
+    _begun = true;   // closes the registration table (see registerPlugin)
     for (uint8_t i = 0; i < _count; i++) {
         _plugins[i]->begin();
     }

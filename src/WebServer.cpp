@@ -1,8 +1,10 @@
 #include "WebServer.h"
+#include "EmojiFont.h"
 #include "MediaManager.h"
 #include "plugins/PluginManager.h"
 #include "Config.h"
 #include "Logger.h"
+#include "DashboardAssets.h"
 #include <LittleFS.h>
 #include <ArduinoJson.h>
 #include <AsyncJson.h>
@@ -10,8 +12,8 @@
 static const char* TAG = "WebServer";
 
 // Dashboard shell. Plugin cards (and each plugin's <script>) are injected at
-// boot: %MODE_OPTIONS% = display-mode <option> list, %PLUGIN_CARDS% = plugin
-// uiSection() HTML (scripts included).
+// boot: %MODE_OPTIONS% = display-mode <option> list, %LYRICS_CARDS% / %SCORES_CARDS%
+// = plugin uiSection() HTML (scripts included), %EMOJI_PICKER% = the emoji strip.
 //
 // Any plugin card that needs live updates defines
 //   function update<Plugin>(data)   // called with /api/status JSON
@@ -22,165 +24,351 @@ const char index_html[] PROGMEM = R"rawliteral(
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ESP32 Dashboard Config</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>ESP32 Dashboard</title>
   <script>
-    // Plugin cards register functions called with every /api/status poll.
-    // Defined in <head> so plugin scripts (injected above the main block)
-    // can call it while the page is still loading.
     var statusUpdaters = [];
     function registerStatusUpdater(fn) { statusUpdaters.push(fn); }
   </script>
   <style>
-    body { font-family: system-ui, -apple-system, sans-serif; background: #f4f4f9; color: #333; margin: 0; padding: 20px; }
-    .container { max-width: 600px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-    h1 { text-align: center; color: #2c3e50; }
-    .card { border: 1px solid #ddd; border-radius: 5px; padding: 15px; margin-bottom: 20px; }
-    .card h2 { margin-top: 0; color: #2980b9; font-size: 1.2em; border-bottom: 1px solid #eee; padding-bottom: 5px; }
-    label { display: block; margin-bottom: 5px; font-weight: bold; }
-    input[type="text"], input[type="password"], input[type="range"], select { width: 100%; box-sizing: border-box; padding: 8px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; }
-    button { background: #3498db; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; font-size: 1em; }
-    button:hover { background: #2980b9; }
-    button.danger { background: #e74c3c; }
-    button.danger:hover { background: #c0392b; }
-    .row { display: flex; justify-content: space-between; margin-bottom: 5px; }
-    .value { font-family: monospace; color: #555; }
-    .file-item { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-bottom: 1px solid #f0f0f0; }
-    .lyric-line { font-style: italic; color: #888; }
+%DASHBOARD_CSS%
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>Dashboard Config</h1>
 
-    <div class="card">
-      <h2>Device Status</h2>
-      <div class="row"><span>Firmware:</span> <span class="value" id="firmware">-</span></div>
-      <div class="row"><span>Uptime:</span> <span class="value" id="uptime">-</span></div>
-      <div class="row"><span>Free Heap:</span> <span class="value" id="heap">-</span></div>
+  <div class="topbar">
+    <div class="topbar-title">
+      <div class="topbar-dot" id="wifiDot"></div>
+      <h1>ESP32 Dashboard</h1>
     </div>
-
-    <div class="card">
-      <h2>Screen Mode Switcher</h2>
-      <label>Active Screen Mode</label>
-      <select id="displayMode" onchange="postData('/api/mode', 'mode=' + this.value)">
-%MODE_OPTIONS%
-      </select>
-      <label>Slideshow Interval: <span id="intervalVal">5</span> sec</label>
-      <input type="range" id="ssInterval" min="2" max="60" value="5" oninput="document.getElementById('intervalVal').innerText = this.value">
-      <button onclick="postData('/api/interval', 'seconds=' + document.getElementById('ssInterval').value)">Apply Interval</button>
-    </div>
-
-%PLUGIN_CARDS%
-
-    <div class="card">
-      <h2>Upload Media (JPEG / PNG / GIF)</h2>
-      <form method="POST" action="/upload" enctype="multipart/form-data">
-        <input type="file" name="upload" accept=".jpg,.jpeg,.png,.gif" required>
-        <br><br>
-        <button type="submit">Upload to Screen Flash</button>
-      </form>
-    </div>
-
-    <div class="card">
-      <h2>Stored Media Files</h2>
-      <div id="fileList">Loading files...</div>
-    </div>
-
-    <div class="card">
-      <h2>Display Settings</h2>
-      <label>Theme</label>
-      <select id="theme" onchange="postData('/api/theme', 'theme=' + this.value)">
-        <option value="default">Default</option>
-        <option value="pikachu">Pikachu</option>
-        <option value="cyberpunk">Cyberpunk</option>
-        <option value="midnight">Midnight</option>
-      </select>
-      <p style="color: #888; font-size: 0.85em; margin-top: 0;">Preset color scheme. Selecting a theme resets the lyric &amp; heart colors to its palette &mdash; you can still customize them below.</p>
-      <label>Orientation</label>
-      <select id="rotation" onchange="postData('/api/orientation', 'rotation=' + this.value)">
-        <option value="0">Portrait</option>
-        <option value="1">Landscape</option>
-        <option value="2">Portrait (flipped)</option>
-        <option value="3">Landscape (flipped)</option>
-      </select>
-      <p style="color: #888; font-size: 0.85em; margin-top: 0;">Applies instantly; the active screen re-lays out for the new dimensions.</p>
-      <label>Brightness: <span id="brightVal"></span>%</label>
-      <input type="range" id="brightness" min="0" max="255" oninput="document.getElementById('brightVal').innerText = Math.round(this.value/255*100)">
-      <button onclick="postData('/api/brightness', 'brightness=' + document.getElementById('brightness').value)">Apply</button>
-    </div>
-
-    <div class="card">
-      <h2>Wi-Fi</h2>
-      <div class="row"><span>Status:</span> <span class="value" id="wifiStatus">-</span></div>
-      <div class="row"><span>IP Address:</span> <span class="value" id="ip">-</span></div>
-      <br>
-      <label>SSID</label>
-      <input type="text" id="ssid" placeholder="Enter SSID">
-      <label>Password</label>
-      <input type="password" id="password" placeholder="Enter Password">
-      <div style="display:flex; gap:10px;">
-        <button onclick="postData('/api/wifi', 'ssid=' + encodeURIComponent(document.getElementById('ssid').value) + '&password=' + encodeURIComponent(document.getElementById('password').value))">Save</button>
-        <button onclick="postData('/api/connect', '')">Connect</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>Location Settings (Weather)</h2>
-      <label>Latitude</label>
-      <input type="text" id="lat" placeholder="e.g. 28.61">
-      <label>Longitude</label>
-      <input type="text" id="lon" placeholder="e.g. 77.20">
-      <button onclick="postData('/api/location', 'lat=' + encodeURIComponent(document.getElementById('lat').value) + '&lon=' + encodeURIComponent(document.getElementById('lon').value))">Save Location</button>
-    </div>
-
-    <div class="card">
-      <h2>Clock Settings</h2>
-      <label>Custom Text</label>
-      <input type="text" id="clockText" placeholder="Enter text below clock">
-      <button onclick="postData('/api/clocktext', 'text=' + encodeURIComponent(document.getElementById('clockText').value))">Save Text</button>
-      <br><br>
-      <label>Pixel Heart Color</label>
-      <input type="color" id="heartColor" value="#00d2ff" style="height: 40px; padding: 2px;">
-      <button onclick="postData('/api/heartcolor', 'color=' + encodeURIComponent(document.getElementById('heartColor').value))">Save Heart Color</button>
-    </div>
-
-    <div class="card">
-      <h2>System</h2>
-      <div style="display:flex; gap:10px;">
-        <button class="danger" onclick="if(confirm('Restart device?')) postData('/api/restart', '')">Restart</button>
-        <button class="danger" onclick="if(confirm('Factory reset? All settings will be lost.')) postData('/api/reset', '')">Factory Reset</button>
-      </div>
+    <div class="status-chips">
+      <span class="chip" id="chipUptime">–</span>
+      <span class="chip" id="chipHeap">–</span>
+      <span class="chip" id="chipFw">–</span>
     </div>
   </div>
 
+  <div class="layout">
+    <div class="main-content">
+
+      <!-- ══════════════ HOME ══════════════ -->
+      <div class="section active" id="s-home">
+
+        <div class="card">
+          <h2>Device</h2>
+          <div class="row"><span>Firmware</span><span class="value" id="firmware">–</span></div>
+          <div class="row"><span>Uptime</span><span class="value" id="uptime">–</span></div>
+          <div class="row"><span>Free heap</span><span class="value" id="heap">–</span></div>
+          <div class="row"><span>Wi-Fi</span><span class="value" id="wifiStatus">–</span></div>
+          <div class="row"><span>IP address</span><span class="value" id="ip">–</span></div>
+        </div>
+
+        <div class="card">
+          <h2>Active Screen</h2>
+          <label>Mode</label>
+          <select id="displayMode" onchange="postData('/api/mode','mode='+this.value)">
+%MODE_OPTIONS%
+          </select>
+          <label>Slideshow interval</label>
+          <div class="slider-row">
+            <input type="range" id="ssInterval" min="2" max="60" value="5" oninput="document.getElementById('intervalVal').innerText=this.value">
+            <span class="slider-val"><span id="intervalVal">5</span>s</span>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-primary btn-sm" onclick="postData('/api/interval','seconds='+document.getElementById('ssInterval').value)">Apply Interval</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>System</h2>
+          <div class="btn-row">
+            <button class="btn btn-secondary btn-sm" onclick="showSection('s-settings')">⚙ Wi-Fi Settings</button>
+          </div>
+          <div class="btn-row" style="margin-top:8px;">
+            <button class="btn btn-danger" onclick="if(confirm('Restart device?'))postData('/api/restart','')">Restart</button>
+            <button class="btn btn-secondary" onclick="if(confirm('Factory reset? All settings will be lost.'))postData('/api/reset','')">Factory Reset</button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ══════════════ DISPLAY ══════════════ -->
+      <div class="section" id="s-display">
+
+        <div class="card">
+          <h2>Appearance</h2>
+          <label>Theme</label>
+          <select id="theme" onchange="postData('/api/theme','theme='+this.value)">
+            <option value="default">Default</option>
+            <option value="pikachu">Pikachu</option>
+            <option value="cyberpunk">Cyberpunk</option>
+            <option value="midnight">Midnight</option>
+          </select>
+          <p>Preset colour scheme. Themes reset lyric &amp; heart colours to their palette — you can still customise them below.</p>
+          <label>Orientation</label>
+          <select id="rotation" onchange="postData('/api/orientation','rotation='+this.value)">
+            <option value="0">Portrait</option>
+            <option value="1">Landscape</option>
+            <option value="2">Portrait (flipped)</option>
+            <option value="3">Landscape (flipped)</option>
+          </select>
+          <p>Applies instantly; the active screen re-lays out for the new dimensions.</p>
+          <label>Brightness</label>
+          <div class="slider-row">
+            <input type="range" id="brightness" min="0" max="255" oninput="document.getElementById('brightVal').innerText=Math.round(this.value/255*100)">
+            <span class="slider-val"><span id="brightVal">–</span>%</span>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-primary btn-sm" onclick="postData('/api/brightness','brightness='+document.getElementById('brightness').value)">Apply</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Clock</h2>
+          <label>Clock face</label>
+          <select id="clockStyle" onchange="setClockStyle(this.value)">
+            <option value="digital">Digital</option>
+            <option value="analogue">Analogue</option>
+            <option value="8bit">8-bit</option>
+            <option value="anime">Anime</option>
+            <option value="minimal">Minimal</option>
+          </select>
+          <p id="faceHint">Pick a face from the previews below — the panel repaints straight away.</p>
+          <div class="face-grid" id="faceGrid">
+            <button type="button" class="face-card" data-face="digital" onclick="setClockStyle('digital')">
+              <span class="face-thumb t-digital"><i class="heart"></i><i class="big"></i><i class="small"></i></span>
+              <span class="face-name">Digital</span>
+              <span class="face-desc">Heart above big time</span>
+            </button>
+            <button type="button" class="face-card" data-face="analogue" onclick="setClockStyle('analogue')">
+              <span class="face-thumb t-analogue"><i class="ring"></i><i class="hand h"></i><i class="hand m"></i><i class="hand s"></i><i class="pin"></i></span>
+              <span class="face-name">Analogue</span>
+              <span class="face-desc">Dial with live hands</span>
+            </button>
+            <button type="button" class="face-card" data-face="8bit" onclick="setClockStyle('8bit')">
+              <span class="face-thumb t-8bit"><i class="big"></i><i class="small"></i></span>
+              <span class="face-name">8-bit</span>
+              <span class="face-desc">Framed block digits</span>
+            </button>
+            <button type="button" class="face-card" data-face="anime" onclick="setClockStyle('anime')">
+              <span class="face-thumb t-anime"><i class="sp" style="left:14px;top:7px;"></i><i class="sp x" style="left:11px;top:10px;"></i><i class="sp" style="right:16px;top:15px;"></i><i class="sp x" style="right:13px;top:18px;"></i><i class="eye l"></i><i class="eye r"></i><i class="smile"></i><i class="big"></i></span>
+              <span class="face-name">Anime</span>
+              <span class="face-desc">Chibi face + sparkles</span>
+            </button>
+            <button type="button" class="face-card" data-face="minimal" onclick="setClockStyle('minimal')">
+              <span class="face-thumb t-minimal"><i class="big"></i><i class="rule"></i><i class="small"></i></span>
+              <span class="face-name">Minimal</span>
+              <span class="face-desc">Time and a hairline rule</span>
+            </button>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-secondary btn-sm" onclick="postData('/api/mode','mode=0')">▶ Show clock on device</button>
+          </div>
+          <label>Custom text (shown below the time)</label>
+          <input type="text" id="clockText" placeholder="e.g. Good morning!">
+          <div class="emoji-row">%EMOJI_PICKER%</div>
+          <div class="btn-row">
+            <button class="btn btn-primary btn-sm" onclick="postData('/api/clocktext','text='+encodeURIComponent(document.getElementById('clockText').value))">Save Text</button>
+          </div>
+          <p>Tap an emoji to append it, then Save Text. The panel draws these as built-in colour sprites; emoji outside the strip are ignored.</p>
+          <label>Pixel heart colour</label>
+          <div class="color-row">
+            <input type="color" id="heartColor" value="#00d2ff">
+            <input type="text" id="heartColorHex" value="#00d2ff" maxlength="7" placeholder="#RRGGBB" style="flex:1;margin:0;">
+            <button class="btn btn-primary btn-sm" onclick="saveHeartColor()">Save</button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ══════════════ MEDIA ══════════════ -->
+      <div class="section" id="s-media">
+
+        <div class="card">
+          <h2>Upload Media</h2>
+          <form method="POST" action="/upload" enctype="multipart/form-data" id="uploadForm">
+            <label class="upload-zone" for="fileInput">
+              <div class="upload-icon">🖼️</div>
+              <div id="uploadLabel">Tap to choose a JPEG, PNG, or GIF</div>
+              <p>File is saved to internal flash (LittleFS)</p>
+              <input type="file" id="fileInput" name="upload" accept=".jpg,.jpeg,.png,.gif" required onchange="document.getElementById('uploadLabel').innerText=this.files[0]?this.files[0].name:'Tap to choose a JPEG, PNG, or GIF'">
+            </label>
+            <div class="btn-row">
+              <button type="submit" class="btn btn-primary">Upload to Flash</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="card">
+          <h2>Stored Files</h2>
+          <div id="fileList"><p>Loading…</p></div>
+        </div>
+
+      </div>
+
+      <!-- ══════════════ LYRICS ══════════════ -->
+      <div class="section" id="s-lyrics">
+%LYRICS_CARDS%
+      </div>
+
+      <!-- ══════════════ SCORES ══════════════ -->
+      <div class="section" id="s-scores">
+%SCORES_CARDS%
+      </div>
+
+      <!-- ══════════════ SETTINGS ══════════════ -->
+      <div class="section" id="s-settings">
+
+        <div class="card">
+          <h2>Wi-Fi</h2>
+          <div class="row"><span>Status</span><span class="value" id="wifiStatus2">–</span></div>
+          <div class="row"><span>IP address</span><span class="value" id="ip2">–</span></div>
+          <label>SSID</label>
+          <input type="text" id="ssid" placeholder="Network name">
+          <label>Password</label>
+          <input type="password" id="password" placeholder="Password">
+          <div class="btn-row">
+            <button class="btn btn-primary btn-sm" onclick="postData('/api/wifi','ssid='+encodeURIComponent(document.getElementById('ssid').value)+'&password='+encodeURIComponent(document.getElementById('password').value))">Save</button>
+            <button class="btn btn-secondary btn-sm" onclick="postData('/api/connect','')">Connect</button>
+          </div>
+        </div>
+
+      </div>
+
+    </div><!-- /main-content -->
+  </div><!-- /layout -->
+
+  <!-- Bottom nav (mobile) -->
+  <nav class="nav" id="bottomNav">
+    <button class="nav-btn active" onclick="showSection('s-home',this)" id="nb-home">
+      <svg viewBox="0 0 24 24"><path d="M3 9.5L12 3l9 6.5V20a1 1 0 01-1 1H4a1 1 0 01-1-1z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      Home
+    </button>
+    <button class="nav-btn" onclick="showSection('s-display',this)" id="nb-display">
+      <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+      Display
+    </button>
+    <button class="nav-btn" onclick="showSection('s-media',this)" id="nb-media">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+      Media
+    </button>
+    <button class="nav-btn" onclick="showSection('s-lyrics',this)" id="nb-lyrics">
+      <svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+      Lyrics
+    </button>
+    <button class="nav-btn" onclick="showSection('s-scores',this)" id="nb-scores">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
+      Scores
+    </button>
+  </nav>
+
   <script>
+    // ── Navigation ──────────────────────────────────────────────
+    function showSection(id, btn) {
+      document.querySelectorAll('.section').forEach(function(s){ s.classList.remove('active'); });
+      document.getElementById(id).classList.add('active');
+      // mobile bottom nav
+      document.querySelectorAll('.nav-btn').forEach(function(b){ b.classList.remove('active'); });
+      if (btn) btn.classList.add('active');
+      // highlight the matching bottom-nav button for the active section
+      var sectionNavMap = {
+        's-home':'nb-home','s-display':'nb-display','s-media':'nb-media',
+        's-lyrics':'nb-lyrics','s-scores':'nb-scores'
+      };
+      var nbId = sectionNavMap[id];
+      if (nbId) { var nb = document.getElementById(nbId); if(nb) nb.classList.add('active'); }
+    }
+
+    // ── Helpers ────────────────────────────────────────────────
+    function postData(url, body) {
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body
+      }).then(function(){ updateData(); });
+    }
+
+    function fmtUptime(s) {
+      if (s < 60) return s + 's';
+      if (s < 3600) return Math.floor(s/60) + 'm ' + (s%60) + 's';
+      return Math.floor(s/3600) + 'h ' + Math.floor((s%3600)/60) + 'm';
+    }
+
+    function saveHeartColor() {
+      var hex = document.getElementById('heartColorHex').value.trim();
+      if (!/^#[0-9a-fA-F]{6}$/.test(hex)) { alert('Enter a colour as #RRGGBB'); return; }
+      document.getElementById('heartColor').value = hex;
+      postData('/api/heartcolor', 'color=' + encodeURIComponent(hex));
+    }
+    document.getElementById('heartColor').addEventListener('input', function() {
+      document.getElementById('heartColorHex').value = this.value;
+    });
+
+    // ── Clock face picker ──────────────────────────────────────
+    var CLOCK_FACE_NOTES = {
+      'digital':  'Heart, big time and the date. The lyric + heart effects still apply to this face.',
+      'analogue': 'Ticked dial with live hour, minute and second hands. The date sits underneath.',
+      '8bit':     'Double pixel frame with chunky block digits and a seconds counter.',
+      'anime':    'Sparkles, a chibi face and a glowing gradient time.',
+      'minimal':  'Clean time with a hairline rule and the date below — no other chrome.'
+    };
+
+    function markClockFace(face) {
+      if (!face) return;
+      var cards = document.querySelectorAll('#faceGrid .face-card');
+      for (var i = 0; i < cards.length; i++) {
+        cards[i].classList.toggle('active', cards[i].getAttribute('data-face') === face);
+      }
+      var hint = document.getElementById('faceHint');
+      if (hint && CLOCK_FACE_NOTES[face]) hint.innerText = CLOCK_FACE_NOTES[face];
+    }
+
+    function setClockStyle(face) {
+      postData('/api/clockstyle', 'style=' + encodeURIComponent(face));
+      var sel = document.getElementById('clockStyle');
+      if (sel) sel.value = face;
+      markClockFace(face);
+    }
+
+    // ── Status polling ─────────────────────────────────────────
     function updateData() {
-      fetch('/api/status').then(r => r.json()).then(data => {
-        document.getElementById('firmware').innerText = data.firmware;
-        document.getElementById('uptime').innerText = data.uptime + ' s';
-        document.getElementById('heap').innerText = data.heap + ' bytes';
-        document.getElementById('wifiStatus').innerText = data.wifiStatus;
-        document.getElementById('ip').innerText = data.ip;
+      fetch('/api/status').then(function(r){ return r.json(); }).then(function(data) {
+        document.getElementById('firmware').innerText = data.firmware || '–';
+        var ut = fmtUptime(data.uptime || 0);
+        document.getElementById('uptime').innerText = ut;
+        document.getElementById('chipUptime').innerText = ut;
+        var hk = data.heap ? Math.round(data.heap/1024) + ' KB' : '–';
+        document.getElementById('heap').innerText = data.heap ? data.heap + ' B' : '–';
+        document.getElementById('chipHeap').innerText = hk;
+        document.getElementById('chipFw').innerText = data.firmware || '–';
+
+        var connected = data.wifiStatus === 'Connected';
+        document.getElementById('wifiStatus').innerText = data.wifiStatus || '–';
+        document.getElementById('wifiStatus2').innerText = data.wifiStatus || '–';
+        document.getElementById('ip').innerText = data.ip || '–';
+        document.getElementById('ip2').innerText = data.ip || '–';
+        var dot = document.getElementById('wifiDot');
+        dot.className = 'topbar-dot ' + (connected ? 'online' : 'offline');
 
         if (document.activeElement !== document.getElementById('brightness')) {
           document.getElementById('brightness').value = data.brightness;
           document.getElementById('brightVal').innerText = Math.round(data.brightness/255*100);
         }
         if (!document.getElementById('ssid').value && document.activeElement !== document.getElementById('ssid')) {
-          document.getElementById('ssid').value = data.ssid;
+          document.getElementById('ssid').value = data.ssid || '';
         }
         if (document.activeElement !== document.getElementById('clockText') && data.clockText !== undefined) {
           document.getElementById('clockText').value = data.clockText;
         }
+        if (data.clockStyle !== undefined) {
+          if (document.activeElement !== document.getElementById('clockStyle')) {
+            document.getElementById('clockStyle').value = data.clockStyle;
+          }
+          markClockFace(data.clockStyle);
+        }
         if (document.activeElement !== document.getElementById('heartColor') && data.heartColor !== undefined) {
           document.getElementById('heartColor').value = data.heartColor;
-        }
-        if (document.activeElement !== document.getElementById('lat') && data.lat !== undefined) {
-          document.getElementById('lat').value = data.lat;
-        }
-        if (document.activeElement !== document.getElementById('lon') && data.lon !== undefined) {
-          document.getElementById('lon').value = data.lon;
+          document.getElementById('heartColorHex').value = data.heartColor;
         }
         if (document.activeElement !== document.getElementById('displayMode') && data.displayMode !== undefined) {
           document.getElementById('displayMode').value = data.displayMode;
@@ -196,46 +384,64 @@ const char index_html[] PROGMEM = R"rawliteral(
           document.getElementById('intervalVal').innerText = data.ssInterval;
         }
         for (var i = 0; i < statusUpdaters.length; i++) {
-          try { statusUpdaters[i](data); } catch (e) { console.error(e); }
+          try { statusUpdaters[i](data); } catch(e) { console.error(e); }
         }
       });
-      loadFiles();
+      // NOTE: the media list is NOT re-fetched here. It only changes when a
+      // file is uploaded or deleted, and polling it re-listed LittleFS and
+      // re-serialised the directory JSON every 4 seconds on the device.
     }
 
     function loadFiles() {
-      fetch('/api/files').then(r => r.json()).then(files => {
-        let html = '';
-        if (files.length === 0) {
-          html = '<p>No media files uploaded yet.</p>';
-        } else {
-          files.forEach(f => {
-            html += `<div class="file-item"><span>${f}</span><button class="danger" onclick="deleteFile('${f}')">Delete</button></div>`;
-          });
-        }
-        document.getElementById('fileList').innerHTML = html;
+      fetch('/api/files').then(function(r){ return r.json(); }).then(function(files) {
+        var el = document.getElementById('fileList');
+        if (!files.length) { el.innerHTML = '<p>No media files uploaded yet.</p>'; return; }
+        var html = '';
+        files.forEach(function(f) {
+          var ext = f.split('.').pop().toLowerCase();
+          var icon = (ext==='gif') ? '🎞️' : '🖼️';
+          html += '<div class="file-item"><span class="file-name">' + icon + ' ' + f + '</span>' +
+            '<button class="btn btn-danger btn-sm" onclick="deleteFile(\'' + f + '\')">Delete</button></div>';
+        });
+        el.innerHTML = html;
       });
     }
 
     function deleteFile(name) {
       if (confirm('Delete ' + name + '?')) {
         postData('/api/deletefile', 'filename=' + encodeURIComponent(name));
+        setTimeout(loadFiles, 400);  // refresh the list once the delete lands
       }
     }
 
-    function postData(url, body) {
-      fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: body
-      }).then(() => updateData());
+    // ── Emoji picker ───────────────────────────────────────────
+    function insertEmoji(ch) {
+      var el = document.getElementById('clockText');
+      if (!el) return;
+      el.value += ch;
+      el.focus();
     }
 
+    markClockFace(document.getElementById('clockStyle').value);
+    loadFiles();  // once at load; uploads reload the page and deletes refresh it
     setInterval(updateData, 4000);
     updateData();
   </script>
 </body>
 </html>
 )rawliteral";
+
+
+// Count non-overlapping occurrences of needle in haystack without allocating.
+static size_t countOccurrences(const char* haystack, const char* needle) {
+    if (!haystack || !needle || !*needle) return 0;
+    const size_t nLen = strlen(needle);
+    size_t found = 0;
+    for (const char* p = haystack; (p = strstr(p, needle)) != nullptr; p += nLen) {
+        found++;
+    }
+    return found;
+}
 
 static File uploadFile;
 
@@ -267,6 +473,7 @@ String WebServer::buildStatusJson() {
     doc["wifiStatus"] = _wifiManager.isConnected() ? "Connected" : "Disconnected";
     doc["ip"] = _wifiManager.ipAddress();
     doc["clockText"] = _settings.getClockText();
+    doc["clockStyle"] = _settings.getClockStyle();
     doc["theme"] = _settings.getTheme();
     doc["heartColor"] = _settings.getHeartColor();
     doc["lyricColor"] = _settings.getLyricColor();
@@ -274,8 +481,8 @@ String WebServer::buildStatusJson() {
     doc["lyricRainbow"] = _settings.getLyricRainbow();
     doc["lyricFull"] = _settings.getLyricFull();
     doc["lyricGradient"] = _settings.getLyricGradient();
-    doc["lat"] = _settings.getLatitude();
-    doc["lon"] = _settings.getLongitude();
+    doc["lyricScroll"] = _settings.getLyricScroll();
+    doc["lyricFullSize"] = _settings.getLyricFullSize();
     doc["displayMode"] = _settings.getDisplayMode();
     doc["rotation"] = _settings.getRotation();
     doc["ssInterval"] = _settings.getSlideshowInterval();
@@ -296,37 +503,117 @@ String WebServer::buildStatusJson() {
 }
 
 String WebServer::buildIndexHtml() {
-    String html = index_html;
+    // The assembled page is large (~57 KB) and String::replace() reallocates the
+    // whole thing per substitution, so the growth is computed up front, the
+    // buffer is reserved once, and the replaces then fit without reallocating.
+    // Otherwise the peak heap need is several times the page size - enough to
+    // fail while a live ESPN poller is holding TLS buffers.
+    // %DASHBOARD_CSS% is the shared design-system stylesheet (DashboardAssets.h),
+    // spliced straight from flash so it never needs a second in-RAM copy; the
+    // other four carry the plugin-built fragments.
+    static const char* const PLACEHOLDER[5] = {
+        "%DASHBOARD_CSS%", "%MODE_OPTIONS%", "%LYRICS_CARDS%", "%SCORES_CARDS%",
+        "%EMOJI_PICKER%"
+    };
+
+    // Every substitution is assembled first; the page is then reserved and
+    // filled in a single allocation (see the reserve further down).
+    String modeOptions, lyricsCards, scoresCards, emojiButtons;
 
     // 1. Mode dropdown from the registered plugins (name + mode number).
-    String modeOptions;
     if (_pluginManager) {
         for (uint8_t i = 0; i < _pluginManager->count(); i++) {
             Plugin* p = _pluginManager->at(i);
             modeOptions += "<option value=\"" + String(p->mode()) + "\">" + p->name() + "</option>\n        ";
         }
     }
-    html.replace("%MODE_OPTIONS%", modeOptions);
-
-    // 2. Plugin cards + script blocks.
-    String pluginCards;
+    // 2. Route each plugin's uiSection() into its section by plugin id.
+    //    "lyrics" -> %LYRICS_CARDS%, "scores" -> %SCORES_CARDS%,
+    //    anything else appended to lyrics section as fallback.
     if (_pluginManager) {
         for (uint8_t i = 0; i < _pluginManager->count(); i++) {
-            String section = _pluginManager->at(i)->uiSection();
-            if (section.length() > 0) {
-                pluginCards += section;
-                pluginCards += "\n";
+            Plugin* p = _pluginManager->at(i);
+            String section = p->uiSection();
+            if (section.length() == 0) continue;
+            String pid = String(p->id());
+            if (pid == "scores") {
+                scoresCards += section + "\n";
+            } else {
+                // lyrics and any future plugins go into lyrics section
+                lyricsCards += section + "\n";
             }
         }
     }
-    html.replace("%PLUGIN_CARDS%", pluginCards);
+    // Reserve the exact final size (shell + the growth from each substitution)
+    // and fill in one allocation: with enough capacity the replaces below never
+    // reallocate, so the peak heap need is the page itself rather than several
+    // copies of it.
+    size_t finalLen = strlen(index_html);
+    {
+        const String* values[4] = { &modeOptions, &lyricsCards, &scoresCards, &emojiButtons };
+        for (uint8_t i = 0; i < 4; i++) {
+            const char* ph = PLACEHOLDER[i + 1];   // slot 0 is the stylesheet
+            const size_t phLen = strlen(ph);
+            const size_t found = countOccurrences(index_html, ph);
+            if (found == 0) continue;
+            const size_t newLen = values[i]->length();
+            // Growth only: a shorter replacement needs no extra room.
+            if (newLen > phLen) finalLen += found * (newLen - phLen);
+        }
+        // The stylesheet is spliced from flash, so only its length grows the page.
+        finalLen += countOccurrences(index_html, PLACEHOLDER[0]) *
+                    (strlen(DASHBOARD_CSS) - strlen(PLACEHOLDER[0]));
+    }
+    String html;
+    if (!html.reserve(finalLen)) {
+        // Out of contiguous heap: report it and let the route answer with its
+        // fallback page rather than a blank screen.
+        LOG_ERROR(TAG, ("Dashboard build failed: cannot reserve " + String((unsigned)finalLen) +
+                        " bytes, free heap " + String((unsigned)ESP.getFreeHeap())).c_str());
+        return String();
+    }
+    html = index_html;
+    // Slot 0 first: the stylesheet comes from flash, so this adds no second copy
+    // of it to the heap - the reserved buffer already has room for it.
+    html.replace("%DASHBOARD_CSS%", DASHBOARD_CSS);
+    html.replace("%MODE_OPTIONS%", modeOptions);
+    html.replace("%LYRICS_CARDS%", lyricsCards);
+    html.replace("%SCORES_CARDS%", scoresCards);
 
+    // 3. Emoji picker: one button per built-in sprite (see EmojiFont.h), so the
+    //    strip always matches what the panel can actually draw.
+    char utf8[5];
+    for (const EmojiFont::Sprite* s = EmojiFont::begin(); s; EmojiFont::next(s)) {
+        utf8[EmojiFont::encodeUtf8(s->codepoint, utf8)] = '\0';
+        emojiButtons += "<button type=\"button\" class=\"emoji-btn\" title=\"" + String(s->name) +
+                        " U+" + String(s->codepoint, HEX) + "\" onclick=\"insertEmoji('" +
+                        String(utf8) + "')\">" + String(utf8) + "</button>\n          ";
+    }
+    html.replace("%EMOJI_PICKER%", emojiButtons);
+
+    LOG_INFO(TAG, ("Dashboard built: " + String(html.length()) + " bytes, free heap " +
+                   String((unsigned)ESP.getFreeHeap())).c_str());
     return html;
 }
 
 void WebServer::setupRoutes() {
     _server.on("/", HTTP_GET, [this](AsyncWebServerRequest *request){
-        request->send(200, "text/html", buildIndexHtml());
+        String page = buildIndexHtml();
+        if (page.length() < 1024) {
+            // Assembly failed (see the ERROR log): answer with something the user
+            // can act on instead of a blank white page.
+            String fallback =
+                "<html><head><meta charset=\"utf-8\"><title>ESP32 Dashboard</title></head>"
+                "<body style=\"font-family:sans-serif;background:#ece0c8;color:#3d2f21;padding:24px\">"
+                "<h2>Dashboard unavailable</h2>"
+                "<p>The device could not assemble the dashboard page - it is low on memory.</p>"
+                "<p>Free heap: ";
+            fallback += String((unsigned)ESP.getFreeHeap());
+            fallback += " bytes.</p><p>Restart the device, then reload this page.</p></body></html>";
+            request->send(503, "text/html", fallback);
+            return;
+        }
+        request->send(200, "text/html", page);
     });
 
     _server.on("/api/status", HTTP_GET, [this](AsyncWebServerRequest *request){
@@ -447,19 +734,19 @@ void WebServer::setupRoutes() {
         }
     });
 
-    _server.on("/api/location", HTTP_POST, [this](AsyncWebServerRequest *request){
-        if (request->hasParam("lat", true) && request->hasParam("lon", true)) {
-            _settings.setLatitude(request->getParam("lat", true)->value());
-            _settings.setLongitude(request->getParam("lon", true)->value());
-            LOG_INFO(TAG, "Settings saved: Location");
-        }
-        request->send(200, "text/plain", "OK");
-    });
-
     _server.on("/api/clocktext", HTTP_POST, [this](AsyncWebServerRequest *request){
         if (request->hasParam("text", true)) {
             _settings.setClockText(request->getParam("text", true)->value());
             LOG_INFO(TAG, "Settings saved: Clock text");
+        }
+        request->send(200, "text/plain", "OK");
+    });
+
+    _server.on("/api/clockstyle", HTTP_POST, [this](AsyncWebServerRequest *request){
+        if (request->hasParam("style", true)) {
+            // Settings::setClockStyle ignores unknown faces.
+            _settings.setClockStyle(request->getParam("style", true)->value());
+            LOG_INFO(TAG, "Settings saved: Clock style");
         }
         request->send(200, "text/plain", "OK");
     });

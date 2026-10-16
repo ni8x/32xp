@@ -4,7 +4,8 @@
 static const char* TAG = "WiFi";
 
 WiFiManager::WiFiManager(Settings& settings) 
-    : _settings(settings), _lastConnectAttempt(0), _wasConnected(false) {
+    : _settings(settings), _lastConnectAttempt(0), _wasConnected(false),
+      _lastAddress(IPAddress(0, 0, 0, 0)) {
 }
 
 WiFiManager::~WiFiManager() {
@@ -26,9 +27,15 @@ void WiFiManager::update() {
     if (currentlyConnected && !_wasConnected) {
         LOG_INFO(TAG, "Wi-Fi connected");
         _wasConnected = true;
+        logAddress("IP address:");
     } else if (!currentlyConnected && _wasConnected) {
         LOG_WARN(TAG, "Wi-Fi disconnected");
         _wasConnected = false;
+    } else if (currentlyConnected && WiFi.localIP() != _lastAddress) {
+        // Same connection, new lease (DHCP renewal, roaming to another AP): the
+        // address in the log must not go stale. IPAddress comparison, so this
+        // costs no allocation on the loop path.
+        logAddress("New IP address:");
     }
     
     // Auto reconnect logic
@@ -69,6 +76,13 @@ String WiFiManager::ipAddress() const {
         return WiFi.localIP().toString();
     }
     return "0.0.0.0";
+}
+
+void WiFiManager::logAddress(const char* why) {
+    _lastAddress = WiFi.localIP();
+    const String ip = _lastAddress.toString();
+    const String line = String(why) + " " + ip + " - open http://" + ip + "/";
+    LOG_INFO(TAG, line.c_str());
 }
 
 String WiFiManager::getStatusString() const {

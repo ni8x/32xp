@@ -1,5 +1,6 @@
 #include "Display.h"
 #include "Config.h"
+#include "EmojiFont.h"
 #include "Logger.h"
 #include "ScriptShaping.h"
 #include <U8g2lib.h> // u8g2_SetFont / u8g2_GetGlyphWidth for real glyph advances
@@ -19,6 +20,15 @@ static const char* TAG = "Display";
 // up to ~13px tall with <=11px ascent fits; retune those two numbers if you
 // pick a taller font.
 static const uint8_t* const PIXEL_FONT = u8g2_font_7x13_tr;
+
+// Instagram-style edge fade: glyphs are brightest at the line centre and dim to
+// ~35% at the two ends.
+static constexpr uint8_t GRADIENT_EDGE = 90;
+
+// Where an emoji sprite hangs relative to the text baseline: unifont ink sits
+// 14*size px above the baseline and ~2*size below it, and a sprite cell is
+// 16*size tall, so this lines the emoji up with the glyphs beside it.
+static constexpr int16_t EMOJI_ASCENT = 14;
 
 Display::Display() : _bus(nullptr), _gfx(nullptr) {
 }
@@ -93,15 +103,44 @@ void Display::fillScreen(uint16_t color) {
 }
 
 void Display::drawText(int16_t x, int16_t y, const char* text, uint16_t color, uint8_t size) {
-    if (_gfx && text) {
-        if (ScriptShaping::containsShapedScript(text)) {
-            drawShapedText(x, y, text, color, size);
-            return;
-        }
+    if (!_gfx || !text) return;
+    if (ScriptShaping::containsShapedScript(text)) {
+        drawShapedText(x, y, text, color, size);
+        return;
+    }
+    if (!containsEmoji(text)) {
+        // Fast path: one bulk print for the whole string.
         _gfx->setCursor(x, y);
         _gfx->setTextColor(color);
         _gfx->setTextSize(size);
         _gfx->print(text);
+        return;
+    }
+
+    // Mixed text: walk codepoints so emoji become sprites while everything else
+    // keeps printing through the font.
+    _gfx->setTextSize(size);
+    int16_t cx = x;
+    size_t i = 0;
+    const size_t len = strlen(text);
+    while (i < len) {
+        uint32_t cp = 0;
+        const uint8_t cpLen = EmojiFont::utf8Decode(text, i, cp);
+        if (cpLen == 0) break;
+        if (EmojiFont::isFormatCodepoint(cp)) { i += cpLen; continue; }
+
+        if (const EmojiFont::Sprite* sprite = EmojiFont::find(cp)) {
+            drawEmojiSprite(cx, y, sprite, size);
+        } else {
+            char g[5];
+            const uint8_t gl = EmojiFont::encodeUtf8(cp, g);
+            g[gl] = '\0';
+            _gfx->setTextColor(color);
+            _gfx->setCursor(cx, y);
+            _gfx->print(g);
+        }
+        cx += codepointAdvance(cp) * (int16_t)size;
+        i += cpLen;
     }
 }
 
@@ -111,6 +150,14 @@ void Display::drawCenteredText(const char* text, uint16_t color, uint8_t size) {
             int16_t x = (_gfx->width() - (int16_t)measureShapedText(text, size)) / 2;
             int16_t y = (_gfx->height() - (int16_t)(16 * size)) / 2;
             drawShapedText(x, y, text, color, size);
+            return;
+        }
+        if (containsEmoji(text)) {
+            // Sprite cells are invisible to the font's ink bounds, so centre the
+            // measured line instead.
+            const int16_t x = ((int16_t)_gfx->width() - (int16_t)measureText(text, size)) / 2;
+            const int16_t y = ((int16_t)_gfx->height() - (int16_t)(16 * size)) / 2;
+            drawText(x, y, text, color, size);
             return;
         }
         int16_t x1, y1;
@@ -158,6 +205,13 @@ void Display::drawCenteredTextAt(int16_t y, const char* text, uint16_t color, ui
         drawShapedText(x, y, text, color, size);
         return;
     }
+    if (containsEmoji(text)) {
+        // Sprite cells are invisible to the font's ink bounds, so centre the
+        // measured line instead (keeps emoji runs level with plain text).
+        const int16_t x = ((int16_t)_gfx->width() - (int16_t)measureText(text, size)) / 2;
+        drawText(x, y, text, color, size);
+        return;
+    }
     int16_t x1, y1;
     uint16_t w, h;
     _gfx->setTextSize(size);
@@ -183,6 +237,12 @@ void Display::drawShapedText(int16_t x, int16_t y, const char* text, uint16_t co
 
 void Display::drawGlyph(int16_t x, int16_t y, uint32_t cp, uint16_t color, uint8_t size) {
     if (!_gfx) return;
+    // Emoji have no font glyph: blit the sprite instead (its own colours win
+    // over the caller's colour, which the layout walkers already faded).
+    if (const EmojiFont::Sprite* sprite = EmojiFont::find(cp)) {
+        drawEmojiSprite(x, y, sprite, size);
+        return;
+    }
     // Encode the codepoint back to a single UTF-8 glyph string.
     char buf[5];
     size_t bl = 0;
@@ -274,24 +334,20 @@ void Display::drawRainbowText(int16_t x, int16_t y, const char* text, uint8_t si
     size_t i = 0, gi = 0;
     const size_t len = strlen(text);
     while (i < len) {
-        uint8_t b = (uint8_t)text[i];
-        size_t cpLen = 1;
-        uint32_t cp = (uint8_t)text[i];
-        if (b >= 0xF0) {
-            cpLen = 4;
-            cp = ((uint32_t)((uint8_t)text[i] & 0x07) << 18) |
-                 ((uint32_t)((uint8_t)text[i+1] & 0x3F) << 12) |
-                 ((uint32_t)((uint8_t)text[i+2] & 0x3F) << 6) |
-                 ((uint32_t)((uint8_t)text[i+3] & 0x3F));
-        } else if (b >= 0xE0) {
-            cpLen = 3;
-            cp = ((uint32_t)((uint8_t)text[i] & 0x0F) << 12) |
-                 ((uint32_t)((uint8_t)text[i+1] & 0x3F) << 6) |
-                 ((uint32_t)((uint8_t)text[i+2] & 0x3F));
-        } else if (b >= 0xC0) {
-            cpLen = 2;
-            cp = ((uint32_t)((uint8_t)text[i] & 0x1F) << 6) |
-                 ((uint32_t)((uint8_t)text[i+1] & 0x3F));
+        uint32_t cp = 0;
+        const uint8_t cpLen = EmojiFont::utf8Decode(text, i, cp);
+        if (cpLen == 0) break;
+        // Variation selectors / ZWJ / skin tones must not take their own cell.
+        if (EmojiFont::isFormatCodepoint(cp)) { i += cpLen; continue; }
+
+        if (const EmojiFont::Sprite* sprite = EmojiFont::find(cp)) {
+            // Emoji keep their own colours. The glow halo passes (dimLevel > 0)
+            // skip them so the halo still reads as text.
+            if (!dimLevel) drawEmojiSprite(cx, y, sprite, size);
+            cx += codepointAdvance(cp) * (int16_t)size;
+            i += cpLen;
+            gi++;
+            continue;
         }
 
         uint16_t c = hueToRGB565(hueBase + (uint8_t)(gi * 22));
@@ -304,7 +360,7 @@ void Display::drawRainbowText(int16_t x, int16_t y, const char* text, uint8_t si
         _gfx->setTextColor(c);
         _gfx->setCursor(cx, y);
         _gfx->print(g);
-        cx += glyphAdvance(cp) * size;
+        cx += codepointAdvance(cp) * (int16_t)size;
         i += cpLen;
         gi++;
     }
@@ -327,24 +383,24 @@ void Display::drawGradientText(int16_t x, int16_t y, const char* text, uint8_t s
     size_t i = 0, gi = 0;
     const size_t len = strlen(text);
     while (i < len) {
-        uint8_t b = (uint8_t)text[i];
-        size_t cpLen = 1;
-        uint32_t cp = (uint8_t)text[i];
-        if (b >= 0xF0) {
-            cpLen = 4;
-            cp = ((uint32_t)((uint8_t)text[i] & 0x07) << 18) |
-                 ((uint32_t)((uint8_t)text[i+1] & 0x3F) << 12) |
-                 ((uint32_t)((uint8_t)text[i+2] & 0x3F) << 6) |
-                 ((uint32_t)((uint8_t)text[i+3] & 0x3F));
-        } else if (b >= 0xE0) {
-            cpLen = 3;
-            cp = ((uint32_t)((uint8_t)text[i] & 0x0F) << 12) |
-                 ((uint32_t)((uint8_t)text[i+1] & 0x3F) << 6) |
-                 ((uint32_t)((uint8_t)text[i+2] & 0x3F));
-        } else if (b >= 0xC0) {
-            cpLen = 2;
-            cp = ((uint32_t)((uint8_t)text[i] & 0x1F) << 6) |
-                 ((uint32_t)((uint8_t)text[i+1] & 0x3F));
+        uint32_t cp = 0;
+        const uint8_t cpLen = EmojiFont::utf8Decode(text, i, cp);
+        if (cpLen == 0) break;
+        // Variation selectors / ZWJ / skin tones must not take their own cell.
+        if (EmojiFont::isFormatCodepoint(cp)) { i += cpLen; continue; }
+
+        if (const EmojiFont::Sprite* sprite = EmojiFont::find(cp)) {
+            // Emoji keep their own colours but still fade toward the line ends;
+            // halo passes (dimLevel > 0) skip them so the halo reads as text.
+            if (!dimLevel) {
+                const int16_t cell = (int16_t)EmojiFont::CELL * size;
+                drawEmojiSprite(cx, y, sprite, size,
+                                (uint8_t)gradientBrightness(cx + cell / 2, x, lineW, edgeFactor));
+            }
+            cx += codepointAdvance(cp) * (int16_t)size;
+            i += cpLen;
+            gi++;
+            continue;
         }
 
         int16_t adv = glyphAdvance(cp) * size;
@@ -374,21 +430,27 @@ void Display::drawCenteredTextEffect(int16_t y, const char* text, uint16_t color
         return;
     }
 
-    int16_t x = 0, w = 0;
-    const bool shaped = ScriptShaping::containsShapedScript(text);
-    if (shaped) {
+    int16_t w = 0;
+    if (ScriptShaping::containsShapedScript(text)) {
         w = (int16_t)measureShapedText(text, size);
-        x = (_gfx->width() - w) / 2;
     } else {
         int16_t x1, y1;
         uint16_t ww, h;
         _gfx->setTextSize(size);
         _gfx->getTextBounds(text, 0, 0, &x1, &y1, &ww, &h);
         w = (int16_t)ww;
-        x = ((int16_t)_gfx->width() - w) / 2;
     }
+    int16_t x = ((int16_t)_gfx->width() - w) / 2;
     if (outX) *outX = x;
     if (outW) *outW = w;
+
+    renderTextEffect(x, y, text, color, size, glow, rainbow, gradient, hueBase, w, glowDimOffset);
+}
+
+void Display::renderTextEffect(int16_t x, int16_t y, const char* text, uint16_t color, uint8_t size,
+                               bool glow, bool rainbow, bool gradient, uint8_t hueBase,
+                               int16_t w, uint8_t glowDimOffset) {
+    const bool shaped = ScriptShaping::containsShapedScript(text);
 
     // The shaped layout is computed ONCE per call and reused by every halo
     // pass; re-running the script shaping per pass would waste CPU on every
@@ -400,10 +462,6 @@ void Display::drawCenteredTextEffect(int16_t y, const char* text, uint16_t color
         nItems = layoutShapedText(text, items, 64, &lw);
         if (nItems == 0) return;
     }
-
-    // Edge-fade gradient: shade glyphs brighter at the line centre and dimmer
-    // toward the two ends (Instagram-style fade). ~35% brightness at the ends.
-    static constexpr uint8_t GRADIENT_EDGE = 90;
 
     // One full render pass of the text at a pixel offset with a dim level
     // (0 = full brightness). Rainbow colors per glyph; gradient fades the ends;
@@ -448,7 +506,14 @@ void Display::drawCenteredTextEffect(int16_t y, const char* text, uint16_t color
     renderPass(0, 0, 0);
 }
 
+int16_t Display::codepointAdvance(uint32_t codepoint) {
+    return EmojiFont::find(codepoint) ? (int16_t)EmojiFont::CELL : glyphAdvance(codepoint);
+}
+
 int16_t Display::glyphAdvance(uint32_t codepoint) {
+    // Emoji occupy exactly one sprite cell (the font has no glyph for them, and
+    // u8g2_GetGlyphWidth takes a uint16_t that would truncate the codepoint).
+    if (EmojiFont::find(codepoint)) return EmojiFont::CELL;
     // The font's REAL horizontal advance (8px Latin, 16px Devanagari/Gurmukhi),
     // via the same u8g2 decoder the renderer uses for printing.
     static u8g2_t u8g2;
@@ -561,23 +626,23 @@ uint16_t Display::measureShapedText(const char* text, uint8_t size) {
     return (uint16_t)w * size;
 }
 
-void Display::drawPixelText(int16_t x, int16_t y, const char* text, uint16_t color) {
+void Display::drawPixelText(int16_t x, int16_t y, const char* text, uint16_t color, uint8_t size) {
     if (!_gfx || !text) return;
     _gfx->setFont(PIXEL_FONT); // retro pixel font from the U8g2 lib
     // Paint a black background per glyph cell in the same SPI pass: this erases
     // the previous timestamp in place (no separate black flash -> no blink)
     // and is invisible on the black screen otherwise.
     _gfx->setTextColor(color, BLACK);
-    _gfx->setTextSize(1);
+    _gfx->setTextSize(size);
     _gfx->setCursor(x, y);
     _gfx->print(text);
     _gfx->setFont(u8g2_font_unifont_h_utf8); // restore the lyric font
 }
 
-uint16_t Display::measurePixelText(const char* text) {
+uint16_t Display::measurePixelText(const char* text, uint8_t size) {
     if (!_gfx || !text) return 0;
     _gfx->setFont(PIXEL_FONT);
-    _gfx->setTextSize(1);
+    _gfx->setTextSize(size);
     int16_t x1, y1;
     uint16_t w, h;
     _gfx->getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
@@ -589,6 +654,21 @@ uint16_t Display::measureText(const char* text, uint8_t size) {
     if (!_gfx || !text) return 0;
     if (ScriptShaping::containsShapedScript(text)) {
         return measureShapedText(text, size);
+    }
+    if (containsEmoji(text)) {
+        // Sum the advances: the font's ink bounds ignore the sprite cells, so
+        // centred emoji lines would otherwise sit off-centre.
+        int16_t w = 0;
+        size_t i = 0;
+        const size_t len = strlen(text);
+        while (i < len) {
+            uint32_t cp = 0;
+            const uint8_t cpLen = EmojiFont::utf8Decode(text, i, cp);
+            if (cpLen == 0) break;
+            if (!EmojiFont::isFormatCodepoint(cp)) w += codepointAdvance(cp);
+            i += cpLen;
+        }
+        return (uint16_t)(w * (int16_t)size);
     }
     int16_t x1, y1;
     uint16_t w, h;
@@ -708,12 +788,82 @@ void Display::drawPixelHeart(int16_t x, int16_t y, uint16_t color, uint8_t scale
     }
 }
 
-uint16_t Display::hexToRGB565(const String& hexStr) {
-    String hex = hexStr;
-    if (hex.startsWith("#")) hex = hex.substring(1);
-    long rgb = strtol(hex.c_str(), NULL, 16);
-    uint8_t r = (rgb >> 16) & 0xFF;
-    uint8_t g = (rgb >> 8) & 0xFF;
-    uint8_t b = rgb & 0xFF;
+bool Display::containsEmoji(const char* text) {
+    if (!text) return false;
+    // Every sprite is U+2600 or above, so its UTF-8 starts with 0xE2 (U+2600..
+    // U+2FFF) or 0xF0 (U+1F000+). Latin and Indic text (0xE0/0xE1 leads) and
+    // CJK (0xE4..) short-circuit here and keep the bulk-print fast path.
+    for (const char* p = text; *p; p++) {
+        const uint8_t b = (uint8_t)*p;
+        if (b == 0xF0 || b == 0xE2) return true;
+    }
+    return false;
+}
+
+void Display::drawEmoji(int16_t x, int16_t y, uint32_t codepoint, uint8_t size) {
+    drawEmojiSprite(x, y, EmojiFont::find(codepoint), size);
+}
+
+void Display::drawEmojiCentered(int16_t cx, int16_t cy, uint32_t codepoint, uint8_t size) {
+    const EmojiFont::Sprite* sprite = EmojiFont::find(codepoint);
+    if (!sprite || size == 0) return;
+    const int16_t half = (int16_t)(EmojiFont::CELL / 2) * size;
+    // drawEmojiSprite takes a text baseline, so shift up by the sprite ascent.
+    drawEmojiSprite(cx - half, cy + (int16_t)(EMOJI_ASCENT - EmojiFont::CELL / 2) * size,
+                    sprite, size);
+}
+
+bool Display::isEmoji(uint32_t codepoint) {
+    return EmojiFont::find(codepoint) != nullptr;
+}
+
+void Display::drawEmojiSprite(int16_t x, int16_t baselineY, const EmojiFont::Sprite* sprite,
+                              uint8_t size, uint8_t factor) {
+    if (!_gfx || !sprite || size == 0) return;
+
+    const int16_t top = baselineY - (int16_t)(EMOJI_ASCENT * size);
+    for (uint8_t r = 0; r < EmojiFont::CELL; r++) {
+        const uint64_t row = sprite->rows[r];
+        int16_t c = 0;
+        while (c < EmojiFont::CELL) {
+            // Leftmost pixel of the row is the top nibble.
+            const uint8_t v = (uint8_t)((row >> (4 * (EmojiFont::CELL - 1 - c))) & 0xF);
+            if (v == 0 || v > sprite->colors) { c++; continue; }
+            // Merge the horizontal run: an emoji costs ~30 fills, not 256.
+            uint8_t run = 1;
+            while (c + run < EmojiFont::CELL) {
+                const uint8_t nv = (uint8_t)((row >> (4 * (EmojiFont::CELL - 1 - c - run))) & 0xF);
+                if (nv != v) break;
+                run++;
+            }
+            uint16_t color = sprite->palette[v - 1];
+            if (factor != 255) color = scaleColor(color, factor);
+            _gfx->fillRect(x + c * size, top + r * size, run * size, size, color);
+            c += run;
+        }
+    }
+}
+
+uint16_t Display::hexToRGB565(const char* hexStr) {
+    if (!hexStr) return 0x0000;
+    if (*hexStr == '#') hexStr++;
+    // Parse up to six hex digits by hand: no String, no allocation.
+    uint32_t rgb = 0;
+    for (uint8_t i = 0; i < 6; i++) {
+        const char c = hexStr[i];
+        uint8_t v;
+        if (c >= '0' && c <= '9') v = (uint8_t)(c - '0');
+        else if (c >= 'a' && c <= 'f') v = (uint8_t)(c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F') v = (uint8_t)(c - 'A' + 10);
+        else break;
+        rgb = (rgb << 4) | v;
+    }
+    const uint8_t r = (rgb >> 16) & 0xFF;
+    const uint8_t g = (rgb >> 8) & 0xFF;
+    const uint8_t b = rgb & 0xFF;
     return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+}
+
+uint16_t Display::hexToRGB565(const String& hexStr) {
+    return hexToRGB565(hexStr.c_str());
 }

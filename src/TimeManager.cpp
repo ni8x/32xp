@@ -41,6 +41,16 @@ bool TimeManager::isTimeSynced() const {
     return _isSynced;
 }
 
+bool TimeManager::getHMS(uint8_t& hour, uint8_t& minute, uint8_t& second) const {
+    if (!_isSynced) return false;
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo)) return false;
+    hour = (uint8_t)timeinfo.tm_hour;
+    minute = (uint8_t)timeinfo.tm_min;
+    second = (uint8_t)timeinfo.tm_sec;
+    return true;
+}
+
 String TimeManager::getFormattedTime() const {
     if (!_isSynced) return "--:--:--";
     

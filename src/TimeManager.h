@@ -12,6 +12,9 @@ public:
     void update();
 
     bool isTimeSynced() const;
+    // Current wall-clock time (24h hour, minute, second). Returns false when the
+    // clock is not synced yet; the analogue face then draws a static 12:00 pose.
+    bool getHMS(uint8_t& hour, uint8_t& minute, uint8_t& second) const;
     String getFormattedTime() const;
     String getFormattedDate() const;
     // Compact forms for the portrait clock: "HH:MM" and "01 Jan 2024". The

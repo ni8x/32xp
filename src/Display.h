@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <Arduino_GFX_Library.h>
+#include "EmojiFont.h"
 
 class Display {
 public:
@@ -17,7 +18,7 @@ public:
     
     void drawText(int16_t x, int16_t y, const char* text, uint16_t color, uint8_t size = 1);
     void drawCenteredText(const char* text, uint16_t color, uint8_t size = 1);
-    
+
     void drawLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t color);
     void drawRectangle(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color);
     void drawFilledRectangle(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color);
@@ -54,18 +55,37 @@ public:
     // Small pixel font (ASCII, default 7x13 - very readable) for timestamps /
     // status readouts. Switches the renderer font for the call and restores
     // the lyric unifont.
-    void drawPixelText(int16_t x, int16_t y, const char* text, uint16_t color);
-    uint16_t measurePixelText(const char* text);
+    void drawPixelText(int16_t x, int16_t y, const char* text, uint16_t color, uint8_t size = 1);
+    uint16_t measurePixelText(const char* text, uint8_t size = 1);
 
     // Indic (Devanagari/Gurmukhi) shaped rendering: places matras/virama in
     // the correct positions instead of unifont's linear per-codepoint layout.
     void drawShapedText(int16_t x, int16_t y, const char* text, uint16_t color, uint8_t size);
+
+    // ── Emoji ────────────────────────────────────────────────────────────────
+    // Built-in colour emoji (see EmojiFont.h / tools/gen_emoji.py) render inline
+    // with ordinary text everywhere text is drawn: any codepoint that has a
+    // sprite takes one 16*size px cell and is blitted in its own palette colours
+    // instead of being asked of the font (which has no emoji glyphs at all).
+    // Unicode format codepoints - variation selectors, ZWJ, skin tones - are
+    // skipped, so a keyboard's "❤️" (U+2764 U+FE0F) renders as just the heart.
+    // Unsupported emoji fall through to the font and simply take no space.
+    void drawEmoji(int16_t x, int16_t y, uint32_t codepoint, uint8_t size = 1);
+    // Same, but centred on (cx, cy) - for icon slots beside a heading.
+    void drawEmojiCentered(int16_t cx, int16_t cy, uint32_t codepoint, uint8_t size = 1);
+    bool isEmoji(uint32_t codepoint);
 
     // Live dimensions (follow the current rotation)
     int16_t width();
     int16_t height();
 
     static uint16_t hexToRGB565(const String& hexStr);
+
+    // Same, for a plain C string. Theme palettes store their colours as
+    // "#rrggbb" literals, so without this overload every palette lookup built a
+    // temporary String just to parse six characters - a heap allocation per
+    // call, four per clock tick and several per animated frame.
+    static uint16_t hexToRGB565(const char* hexStr);
 
     Arduino_GFX* getGFX() { return _gfx; }
 
@@ -76,7 +96,22 @@ private:
     };
 
     // Real horizontal advance (px, size 1) of one glyph in the u8g2 unifont.
+    // Emoji report one sprite cell instead, so every layout walker spaces them.
     int16_t glyphAdvance(uint32_t codepoint);
+
+    // Advance (px, size 1) of one codepoint: sprite cell or font glyph.
+    int16_t codepointAdvance(uint32_t codepoint);
+
+    // True when the string holds at least one codepoint with a sprite. Cheap
+    // byte pre-filter, so plain Latin/Indic text takes the old fast path.
+    static bool containsEmoji(const char* text);
+
+    // Blit one sprite (x = left edge, baselineY = text baseline, matching
+    // drawText's y). factor shades every pixel (255 = the sprite's own colours,
+    // used by the gradient fade); transparent pixels are skipped and equal
+    // horizontal runs are merged into one fill.
+    void drawEmojiSprite(int16_t x, int16_t baselineY, const EmojiFont::Sprite* sprite,
+                         uint8_t size, uint8_t factor = 255);
 
     // Lay out shaped text into (codepoint, x) pairs in draw order.
     size_t layoutShapedText(const char* text, ShapedLayoutItem* out, size_t maxOut, int16_t* widthPx);
@@ -92,6 +127,12 @@ private:
     // halo). Shaped text is rendered inline in drawCenteredTextEffect which
     // precomputes the layout once per frame.
     void drawRainbowText(int16_t x, int16_t y, const char* text, uint8_t size, uint8_t hueBase, uint8_t dimLevel);
+
+    // Shared renderer behind both effect entry points: draws text (shaped or
+    // plain) at left edge x with ink width w, applying glow/rainbow/gradient.
+    void renderTextEffect(int16_t x, int16_t y, const char* text, uint16_t color, uint8_t size,
+                          bool glow, bool rainbow, bool gradient, uint8_t hueBase,
+                          int16_t w, uint8_t glowDimOffset);
 
     // ~50%^level brightness of an RGB565 color (level 1 = half, 2 = quarter...).
     uint16_t dimColor(uint16_t color, uint8_t level = 1);

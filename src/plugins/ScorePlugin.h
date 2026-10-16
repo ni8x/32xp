@@ -1,17 +1,20 @@
 #pragma once
 
 #include "Plugin.h"
-#include "../FootballApi.h"
-#include "../CricketApi.h"
+#include "../EspnApi.h"
 
-// Mode 3: cricket / football scoreboard. Cricket is pushed manually; football
-// is populated directly from ESPN's no-key soccer scoreboard (see FootballApi).
+// Mode 3: cricket / football scoreboard. Both sports are populated from ESPN's
+// no-key scoreboard API through one shared client (see EspnApi); the web API
+// can also push a score manually.
 // Everything goes through the generic plugin API:
 //   POST /api/plugin/scores/set      sport,teamA,scoreA,teamB,scoreB,status
 //   POST /api/plugin/scores/sport    sport=cricket|football
 //   POST /api/plugin/scores/clear
 //   POST /api/plugin/scores/football league,event,interval
 //   POST /api/plugin/scores/refresh  (force an ESPN fetch now)
+//   POST /api/plugin/scores/browse   sport,league[,date]  -> match-list JSON
+//     (Look-ahead only: answers the web page's Browse button without touching
+//      the saved feed settings or the live board.)
 // Cricket and football share one field shape; only the header label and the
 // meaning of the status line differ. setScore() is the single mutation point,
 // used by both the web API and the live football importer.
@@ -24,8 +27,9 @@ public:
     uint8_t mode() const override { return 3; }
 
     void begin() override;            // bring up the football poller
-    void enter() override;            // force a repaint when becoming active
-    void backgroundTick() override;   // poll football even off-screen
+    void enter() override;            // repaint + resume ESPN polling
+    void exit() override;             // stop ESPN polling when leaving the screen
+    void backgroundTick() override;   // poll the active sport, scores screen only
     void update() override;           // render only when state changed
     void onRotationChange() override; // re-lay out for the new dimensions
     void onThemeChange() override;    // recolour with the new palette
@@ -54,12 +58,18 @@ private:
         uint8_t scoreSize;
         int16_t row1Y;
         int16_t row2Y;
-        int16_t nameMaxW;
         int16_t statusY;
     };
 
     void drawScreen();
     bool hasData() const;
+    // Bottom line: the status text plus any bracketed score detail. Cached so
+    // the render loop never rebuilds strings / measures text per iteration.
+    void rebuildBottomLine();
+    String statusLine() const { return _bottomLine; }
+    // Fetch the requested ESPN scoreboard on the fly (not persisted) and reply
+    // with a compact {ok, events:[{id,label}]} list for the dashboard.
+    void browseScoreboard(const String& kind, AsyncWebServerRequest* request);
 
     Layout layout() const;
     bool overflows(const String& text, uint8_t size, int16_t maxW) const;
@@ -77,15 +87,18 @@ private:
 
     Display* _display;
     Settings* _settings;
-    FootballApi _football;
-    CricketApi _cricket;
+    EspnApi _football;
+    EspnApi _cricket;
 
+    bool _active;             // true only while the scores screen is showing
     String _sport;
     String _teamA;
     String _scoreA;
     String _teamB;
     String _scoreB;
     String _status;
+    String _bottomLine;       // cached bottom marquee text (status + detail)
+    bool _bottomOverflows;    // cached: whether _bottomLine needs to scroll
     uint32_t _updatedAt;
     bool _dirty;
     uint32_t _lastAgeMinutes; // drives the once-a-minute footer refresh

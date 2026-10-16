@@ -1,6 +1,8 @@
 #include "ScorePlugin.h"
+#include "../DashboardAssets.h"
 #include "../Logger.h"
 #include <ESPAsyncWebServer.h>
+#include <ArduinoJson.h>
 
 static const char* TAG = "ScorePlugin";
 
@@ -23,17 +25,56 @@ static bool numericScore(const String& s) {
     return true;
 }
 
+static String trimmed(String s) { s.trim(); return s; }
+
+// Cricket feeds pack extra info in brackets, e.g. "172/2 (14/20 ov, target 172)".
+// The row next to the team only has room for the bare score, so split the main
+// part from the bracketed detail (which the bottom marquee line shows instead).
+static String scoreMain(const String& s) {
+    const int p = s.indexOf('(');
+    if (p < 0) return s;
+    String m = s.substring(0, p);
+    m.trim();
+    return m;
+}
+
+static String scoreDetail(const String& s) {
+    const int q = s.indexOf('(');
+    if (q < 0) return String();
+    const int close = s.indexOf(')', q);
+    String d = (close > q) ? s.substring(q + 1, close) : s.substring(q + 1);
+    d.trim();
+    return d;
+}
+
+// Bracket content before the comma ("14/20 ov") stays in the team row;
+// content after the comma ("target 172") goes to the bottom marquee line.
+static String scoreTopDetail(const String& s) {
+    const String in = scoreDetail(s);
+    const int c = in.indexOf(',');
+    return (c < 0) ? in : trimmed(in.substring(0, c));
+}
+
+static String scoreBottomDetail(const String& s) {
+    const String in = scoreDetail(s);
+    const int c = in.indexOf(',');
+    return (c < 0) ? String() : trimmed(in.substring(c + 1));
+}
+
 ScorePlugin::ScorePlugin(Display* display, Settings* settings, WiFiManager* wifi)
     : _display(display),
       _settings(settings),
-      _football(*settings, *wifi),
-      _cricket(*settings, *wifi),
+      _football(*settings, *wifi, ESPN_FOOTBALL),
+      _cricket(*settings, *wifi, ESPN_CRICKET),
+      _active(false),
       _sport(settings->getScoreSport()),
       _teamA(),
       _scoreA(),
       _teamB(),
       _scoreB(),
       _status(),
+      _bottomLine(),
+      _bottomOverflows(false),
       _updatedAt(0),
       _dirty(true),
       _lastAgeMinutes(0xFFFFFFFF),
@@ -53,11 +94,18 @@ void ScorePlugin::begin() {
 }
 
 void ScorePlugin::backgroundTick() {
-    // Runs every loop regardless of the active screen, so the board is already
-    // populated when the user switches to it and the daily API budget is spent
-    // on a steady schedule rather than only while visible.
-    _football.update();
-    _cricket.update();
+    // Poll ONLY while the scores screen is the active mode (enter()/exit() keep
+    // _active in step with the mode switch). There is deliberately no
+    // off-screen polling: earlier versions fetched ESPN every loop from every
+    // screen, which burned bandwidth and fragmented the heap with TLS buffers.
+    // Only the active sport's feed is polled: fetching both doubles the HTTPS
+    // work for no visible benefit.
+    if (!_active) return;
+    if (_sport == "football") {
+        _football.update();
+    } else {
+        _cricket.update();
+    }
 }
 
 void ScorePlugin::setScore(const String& sport, const String& teamA, const String& scoreA,
@@ -84,6 +132,8 @@ void ScorePlugin::setScore(const String& sport, const String& teamA, const Strin
         oldScoreA != _scoreA || oldScoreB != _scoreB) {
         _marqueeStartMs = now;
     }
+
+    rebuildBottomLine();
 
     // Going from an empty board to a populated one is not a score change, so it
     // must not fire a blink or a celebration.
@@ -126,6 +176,7 @@ void ScorePlugin::clear() {
     _flashUntilB = 0;
     _goalActive = false;
     _marqueeStartMs = millis();
+    rebuildBottomLine();
     _dirty = true;
 }
 
@@ -135,11 +186,28 @@ bool ScorePlugin::hasData() const {
 
 void ScorePlugin::enter() {
     _marqueeStartMs = millis();
+    rebuildBottomLine();
     _dirty = true;
+    // The scores screen is on show: resume ESPN polling and, if the saved feed
+    // is already due, refresh it now so the board is current on arrival.
+    _active = true;
+    if (_sport == "football") {
+        _football.update();
+    } else {
+        _cricket.update();
+    }
+}
+
+void ScorePlugin::exit() {
+    // Leaving the scores screen stops all ESPN traffic: no background polling,
+    // no TLS buffers held, no heap churn while other screens (and the web
+    // dashboard) are in use.
+    _active = false;
 }
 
 void ScorePlugin::onRotationChange() {
     _marqueeStartMs = millis();
+    rebuildBottomLine(); // overflow depends on the (new) panel width
     _dirty = true;
 }
 
@@ -148,24 +216,14 @@ void ScorePlugin::onThemeChange() {
 }
 
 void ScorePlugin::update() {
-    // ESPN drives only the football board, so a cricket screen remains manual.
-    if (_sport == "football" && _football.hasData()) {
-        String sa = _football.homeGoals() < 0 ? String("-") : String(_football.homeGoals());
-        String sb = _football.awayGoals() < 0 ? String("-") : String(_football.awayGoals());
-        if (_teamA != _football.homeName() || _scoreA != sa ||
-            _teamB != _football.awayName() || _scoreB != sb ||
-            _status != _football.statusText()) {
-            setScore("football", _football.homeName(), sa,
-                     _football.awayName(), sb, _football.statusText());
-        }
-    }
-    if (_sport == "cricket" && _cricket.hasData()) {
-        if (_teamA != _cricket.homeName() || _scoreA != _cricket.homeScore() ||
-            _teamB != _cricket.awayName() || _scoreB != _cricket.awayScore() ||
-            _status != _cricket.statusText()) {
-            setScore("cricket", _cricket.homeName(), _cricket.homeScore(),
-                     _cricket.awayName(), _cricket.awayScore(), _cricket.statusText());
-        }
+    // The board is fed by whichever ESPN client matches the active sport.
+    EspnApi* feed = _sport == "football" ? &_football : &_cricket;
+    if (feed->hasData() &&
+        (_teamA != feed->homeName() || _scoreA != feed->homeScore() ||
+         _teamB != feed->awayName() || _scoreB != feed->awayScore() ||
+         _status != feed->statusText())) {
+        setScore(_sport, feed->homeName(), feed->homeScore(),
+                 feed->awayName(), feed->awayScore(), feed->statusText());
     }
 
     // Refresh the "updated N min ago" footer once a minute (only the minute
@@ -229,10 +287,20 @@ void ScorePlugin::drawScreen() {
     const uint16_t dimColor = Display::hexToRGB565(palette->dimHex);
 
     const char* sportLabel = (_sport == "football") ? "FOOTBALL" : "CRICKET";
+    // Sport icon shown beside the heading (built-in emoji sprite: football /
+    // cricket bat-and-ball, see EmojiFont.h).
+    const uint32_t sportIcon = (_sport == "football") ? 0x26BD : 0x1F3CF;
 
     // Header + separator. Remember unifont ink renders 14*size px ABOVE the
-    // given y, so these y values already account for it.
-    _display->drawCenteredTextAt(L.headerY, sportLabel, accent, 2);
+    // given y, so these y values already account for it. The heading and its
+    // icon are centred as one group.
+    const int16_t iconCell = 16;  // one emoji sprite cell
+    const int16_t headerGap = 8;
+    const int16_t labelW = (int16_t)_display->measureText(sportLabel, 2);
+    const int16_t headX = (L.dispW - (labelW + headerGap + iconCell)) / 2;
+    _display->drawText(headX, L.headerY, sportLabel, accent, 2);
+    _display->drawEmojiCentered(headX + labelW + headerGap + iconCell / 2, L.headerY - 12,
+                                sportIcon, 1);
     _display->drawLine(10, L.lineY, L.dispW - 10, L.lineY, lineColor);
 
     if (!hasData()) {
@@ -270,10 +338,9 @@ ScorePlugin::Layout ScorePlugin::layout() const {
     L.headerY = L.landscape ? 30 : 40;
     L.lineY = L.landscape ? 40 : 48;
     L.nameSize = 2;
-    L.scoreSize = L.landscape ? 3 : 4;
+    L.scoreSize = 2; // Reduced from 3/4 to 2 for both orientations
     L.row1Y = L.landscape ? 100 : 112;
     L.row2Y = L.landscape ? 158 : 188;
-    L.nameMaxW = (int16_t)(L.dispW * 0.52);
     L.statusY = L.landscape ? 208 : 262;
     return L;
 }
@@ -294,51 +361,75 @@ int16_t ScorePlugin::marqueeOffset(const String& text, uint8_t size, int16_t max
 }
 
 bool ScorePlugin::marqueeActive() const {
-    if (!hasData()) return false;
-    const Layout L = layout();
-    return overflows(_teamA, L.nameSize, L.nameMaxW) ||
-           overflows(_teamB, L.nameSize, L.nameMaxW) ||
-           overflows(_status, 2, L.dispW - 20);
+    // Cached: rebuilding the string / measuring text every loop caused heap
+    // churn and stutter. Team names are stable; only the bottom line scrolls.
+    return hasData() && _bottomOverflows;
 }
 
 void ScorePlugin::drawRow(const Layout& L, uint8_t index, uint32_t now, bool flashScore) const {
     const Settings::ThemePalette* palette = Settings::getThemePalette(_settings->getTheme());
     const uint16_t scoreColor = Display::hexToRGB565(palette->lyricHex);
     const uint16_t accent = Display::hexToRGB565(palette->accentHex);
+    const uint16_t dimColor = Display::hexToRGB565(palette->dimHex);
 
     const String& name = (index == 0) ? _teamA : _teamB;
-    const String& score = (index == 0) ? _scoreA : _scoreB;
+    const String& rawScore = (index == 0) ? _scoreA : _scoreB;
+    const String score = scoreMain(rawScore);       // bare score, e.g. "172/2"
+    const String over = scoreTopDetail(rawScore);   // e.g. "14/20 ov"
     const int16_t rowY = (index == 0) ? L.row1Y : L.row2Y;
 
     // Clear only this row's band, so an animated frame never flashes the rest
-    // of the panel. The score sits above the name baseline, hence the min().
+    // of the panel. Name and score share a baseline, so one band covers both.
     const int16_t nameTop = rowY - 14 * L.nameSize;
-    const int16_t scoreTop = rowY + 10 - 14 * L.scoreSize;
-    const int16_t top = ((nameTop < scoreTop) ? nameTop : scoreTop) - 2;
+    const int16_t top = nameTop - 2;
     const int16_t bottom = rowY + 12;
     _display->drawFilledRectangle(0, top, L.dispW, bottom - top, BLACK);
 
-    // Name on the left: scroll it when it will not fit the name column.
-    const int16_t nameX = 15;
-    if (overflows(name, L.nameSize, L.nameMaxW)) {
-        const int16_t off = marqueeOffset(name, L.nameSize, L.nameMaxW, now);
-        _display->drawText(nameX - off, rowY, name.c_str(), WHITE, L.nameSize);
-    } else {
-        _display->drawText(nameX, rowY, name.c_str(), WHITE, L.nameSize);
-    }
+    // Name on the left: kept STABLE (no marquee). Right after it the bare score,
+    // then the over-rate ("14/20 ov") in the smaller font. Nothing draws over
+    // the name: the name shrinks first, then any tail simply clips.
+    const int16_t left = 4;
+    const int16_t right = 2;
+    const int16_t gap = 5;
+    const int16_t overGap = 3;
 
-    // Big right-aligned score; blinks between the theme score colour and the
-    // accent for a moment after it changes.
+    const uint8_t scoreSize = L.scoreSize;
+    const int16_t scoreW = (score.length() > 0)
+        ? (int16_t)_display->measureText(score.c_str(), scoreSize) : 0;
+    const int16_t overW = (over.length() > 0)
+        ? (int16_t)_display->measureText(over.c_str(), 1) : 0;
+
+    int16_t nameMax = L.dispW - left - right
+        - (scoreW > 0 ? scoreW + gap : 0)
+        - (overW > 0 ? overW + overGap : 0);
+    if (nameMax < 1) nameMax = 1;
+    // Draw the name whole when it fits; only reserve ".." room if it must shrink.
+    String fitted = name;
+    if ((int16_t)_display->measureText(name.c_str(), L.nameSize) > nameMax) {
+        fitted = _display->fitText(name, L.nameSize, nameMax);
+    }
+    _display->drawText(left, rowY, fitted.c_str(), WHITE, L.nameSize);
+
+    const int16_t nameW = (int16_t)_display->measureText(fitted.c_str(), L.nameSize);
+    int16_t x = left + nameW + gap;
+
+    // Score immediately to the right of the name; blinks between the theme
+    // score colour and the accent for a moment after it changes.
     if (score.length() > 0) {
         const bool on = flashScore && (((now / 220) & 1) == 0);
         const uint16_t color = on ? accent : scoreColor;
-        const int16_t w = (int16_t)_display->measureText(score.c_str(), L.scoreSize);
-        _display->drawText(L.dispW - 15 - w, rowY + 10, score.c_str(), color, L.scoreSize);
+        _display->drawText(x, rowY, score.c_str(), color, scoreSize);
+        x += scoreW + overGap;
+    }
+    // Over-rate detail, dimmed and smaller, tucked after the score.
+    if (over.length() > 0) {
+        _display->drawText(x, rowY, over.c_str(), dimColor, 1);
     }
 }
 
 void ScorePlugin::drawStatus(const Layout& L, uint32_t now) const {
-    if (_status.length() == 0) return;
+    const String line = statusLine();
+    if (line.length() == 0) return;
     const Settings::ThemePalette* palette = Settings::getThemePalette(_settings->getTheme());
     const uint16_t accent = Display::hexToRGB565(palette->accentHex);
 
@@ -346,14 +437,32 @@ void ScorePlugin::drawStatus(const Layout& L, uint32_t now) const {
     _display->drawFilledRectangle(0, top, L.dispW, L.statusY - top, BLACK);
 
     const int16_t avail = L.dispW - 20;
-    if (overflows(_status, 2, avail)) {
-        // Too long to sit still: scroll it in from the right edge instead of
-        // truncating it with "..".
-        const int16_t off = marqueeOffset(_status, 2, avail, now);
-        _display->drawText(L.dispW - off, L.statusY, _status.c_str(), accent, 2);
+    if (overflows(line, 2, avail)) {
+        // Too long to sit still: scroll it, left across the whole line.
+        const int16_t off = marqueeOffset(line, 2, avail, now);
+        _display->drawText(L.dispW - off, L.statusY, line.c_str(), accent, 2);
     } else {
-        _display->drawCenteredTextAt(L.statusY, _status.c_str(), accent, 2);
+        _display->drawCenteredTextAt(L.statusY, line.c_str(), accent, 2);
     }
+}
+
+void ScorePlugin::rebuildBottomLine() {
+    String line;
+    const String dA = scoreBottomDetail(_scoreA);
+    const String dB = scoreBottomDetail(_scoreB);
+    if (dA.length()) line = dA;
+    if (dB.length() && dB != dA) {
+        if (line.length()) line += "  ";
+        line += dB;
+    }
+    if (_status.length()) {
+        if (line.length()) line += "  ";
+        line += _status;
+    }
+    _bottomLine = line;
+    const int16_t avail = _display->width() - 20;
+    _bottomOverflows = (_bottomLine.length() > 0) &&
+                       ((int16_t)_display->measureText(_bottomLine.c_str(), 2) > avail);
 }
 
 void ScorePlugin::animFrame() {
@@ -361,9 +470,11 @@ void ScorePlugin::animFrame() {
     const uint32_t now = millis();
     const bool flashA = now < _flashUntilA;
     const bool flashB = now < _flashUntilB;
-    if (overflows(_teamA, L.nameSize, L.nameMaxW) || flashA) drawRow(L, 0, now, flashA);
-    if (overflows(_teamB, L.nameSize, L.nameMaxW) || flashB) drawRow(L, 1, now, flashB);
-    if (overflows(_status, 2, L.dispW - 20)) drawStatus(L, now);
+    // Names are static, so only a flashing score needs a row repaint. The
+    // bottom line repaints only while its marquee is actually running.
+    if (flashA) drawRow(L, 0, now, flashA);
+    if (flashB) drawRow(L, 1, now, flashB);
+    if (_bottomOverflows) drawStatus(L, now);
 }
 
 void ScorePlugin::triggerGoal(uint8_t side) {
@@ -392,7 +503,9 @@ void ScorePlugin::drawGoalFrame(uint32_t now) const {
         _display->drawCircle(cx, cy, r, Display::hueToRGB565((uint8_t)(hueBase + i * 24)));
     }
 
-    // Big rainbow + glow "GOAL!" banner (reuses the lyrics screen's renderer).
+    // Football above the banner (emoji sprite), then the big rainbow + glow
+    // "GOAL!" banner (reuses the lyrics screen's renderer).
+    _display->drawEmojiCentered(cx, L.landscape ? 22 : 42, 0x26BD, 2);
     _display->drawCenteredTextEffect(L.landscape ? 100 : 140, "GOAL!", WHITE, 4,
                                      true, true, hueBase);
 
@@ -449,7 +562,7 @@ bool ScorePlugin::handleApi(AsyncWebServerRequest* request, const String& action
     if (action == "cricket") {
         if (request->hasParam("league", true)) {
             int id = request->getParam("league", true)->value().toInt();
-            if (id > 0) _settings->setCricketLeagueId((uint16_t)id);
+            if (id > 0) _settings->setCricketLeagueId((uint32_t)id);
         }
         if (request->hasParam("event", true)) _settings->setCricketEventId(request->getParam("event", true)->value());
         if (request->hasParam("date", true)) _settings->setCricketDate(request->getParam("date", true)->value());
@@ -467,7 +580,58 @@ bool ScorePlugin::handleApi(AsyncWebServerRequest* request, const String& action
         request->send(200, "text/plain", ok ? "OK" : "Fetch failed");
         return true;
     }
+    if (action == "browse") {
+        auto get = [&](const char* key) -> String {
+            return request->hasParam(key, true) ? request->getParam(key, true)->value() : String();
+        };
+        browseScoreboard(get("sport"), request);
+        return true;
+    }
     return false;
+}
+
+// Look-ahead fetch for the dashboard's Browse buttons. The league/date come
+// straight from the form and nothing is persisted, so the device feed keeps
+// running on its saved settings until the user actually saves the choice.
+void ScorePlugin::browseScoreboard(const String& kind, AsyncWebServerRequest* request) {
+    auto get = [&](const char* key) -> String {
+        return request->hasParam(key, true) ? request->getParam(key, true)->value() : String();
+    };
+    const String league = get("league");
+    String date = get("date");
+    String digits;
+    for (size_t i = 0; i < date.length(); ++i) {
+        if (date[i] >= '0' && date[i] <= '9') digits += date[i];
+    }
+    date = digits; // same YYYYMMDD shape the live feed expects
+
+    String list;
+    const uint32_t started = millis();
+    bool ok = false;
+    String error = "Unknown sport";
+    // EspnApi validates the league and owns the error text for both sports.
+    if (kind == "football") {
+        ok = _football.fetchScoreboardFor(league, date, &list);
+        if (!ok) error = _football.lastError();
+    } else if (kind == "cricket") {
+        ok = _cricket.fetchScoreboardFor(league, date, &list);
+        if (!ok) error = _cricket.lastError();
+    }
+    LOG_INFO(TAG, (String("ESPN browse ") + kind + " " + league +
+                   (ok ? String(" ok ") : String(" failed ")) +
+                   String((millis() - started) / 1000) + "s").c_str());
+
+    if (!ok) {
+        JsonDocument err;
+        err["ok"] = false;
+        err["error"] = error;
+        String out;
+        serializeJson(err, out);
+        request->send(200, "application/json", out);
+        return;
+    }
+    if (list.isEmpty()) list = String("{\"ok\":true,\"events\":[]}");
+    request->send(200, "application/json", list);
 }
 
 void ScorePlugin::buildStatusJson(JsonObject obj) {
@@ -495,6 +659,9 @@ void ScorePlugin::buildStatusJson(JsonObject obj) {
         item["id"] = choice.id;
         item["label"] = choice.label;
     }
+    // Human-readable series/league names for the dashboard selects.
+    obj["footballLeagueName"] = _football.leagueName();
+    obj["cricketLeagueName"] = _cricket.leagueName();
     obj["cricketLeague"] = _settings->getCricketLeagueId();
     obj["cricketEvent"] = _settings->getCricketEventId();
     obj["cricketDate"] = _settings->getCricketDate();
@@ -511,10 +678,14 @@ void ScorePlugin::buildStatusJson(JsonObject obj) {
 }
 
 String ScorePlugin::uiSection() const {
-    // Reuses the dashboard's existing CSS (.card, .row, .value) and helpers
-    // (postData, registerStatusUpdater). Values are pushed to the device; the
-    // card never fetches anything from the internet.
-    return R"rawliteral(
+    // Reuses the dashboard's shared CSS (.card, .row, .value, .btn-inline, .hint
+    // from DashboardAssets.h) and helpers (postData, registerStatusUpdater).
+    // Values are pushed to the device; ESPN lookups (Browse matches) also run on
+    // the device, via the scores/browse API, so the browser itself never talks to
+    // the internet.
+    String html;
+    html.reserve(16384);
+    html += R"rawliteral(
     <div class="card">
       <h2>Scores</h2>
       <label>Sport</label>
@@ -534,37 +705,38 @@ String ScorePlugin::uiSection() const {
       <input type="text" id="scoreScoreB" placeholder="e.g. 45/2">
       <label>Status line</label>
       <input type="text" id="scoreStatusLine" placeholder="e.g. India need 42 off 30">
-      <div style="display:flex; gap:10px;">
+      <div class="btn-inline">
         <button onclick="saveScores()">Show on Screen</button>
         <button class="danger" onclick="clearScores()">Clear</button>
       </div>
-      <p style="color:#888; font-size:0.85em; margin-bottom:0;">Cricket and football use the same fields &mdash; just pick the sport. These values are pushed to the device and always win over the live feed below.</p>
+      <p class="hint">Cricket and football use the same fields &mdash; just pick the sport. These values are pushed to the device and always win over the live feed below.</p>
     </div>
+)rawliteral";
 
-    <div class="card">
-      <h2>Live Cricket (ESPN)</h2>
-      <div class="row"><span>Displayed match:</span> <span class="value" id="cricMatch">-</span></div>
-      <div class="row"><span>Feed status:</span> <span class="value" id="cricFeedStatus">-</span></div>
-      <label>Series</label>
-      <select id="cricLeague" onchange="document.getElementById('cricEvent').value=''"><option value="8048">Indian Premier League</option></select>
-      <label>Custom ESPN series ID</label>
-      <input type="number" id="cricLeagueCustom" placeholder="e.g. 8048">
-      <label>Match</label>
-      <select id="cricEvent"><option value="">Automatic: live, then next match</option></select>
-      <label>Match date (optional, for finished scores)</label>
-      <input type="date" id="cricDate" onchange="document.getElementById('cricEvent').value=''">
-      <label>Refresh interval (seconds)</label>
-      <input type="number" id="cricInterval" min="30" max="3600" placeholder="30">
-      <button onclick="saveCricket()">Load series / save match</button>
-      <p style="color:#888; font-size:0.85em; margin-bottom:0;">Uses ESPN directly, with no key. IPL is preselected; enter another ESPN cricket series ID if needed.</p>
-    </div>
+    // Cricket and football share one skeleton (see espnCardHtml above); only the
+    // labels, element-id prefix, option list and buttons differ.
+    html += espnCardHtml(
+        "Live Cricket (ESPN)", "cric", "cricket", "Series",
+        "Custom ESPN series ID (optional)", "number", "e.g. 8048",
+        R"opts(
+        <option value="8048">Indian Premier League</option>
+        <option value="1490534">Big Bash League</option>
+        <option value="1512690">T20 Blast (England)</option>
+        <option value="1521176">The Hundred (Men)</option>
+        <option value="1521193">The Hundred (Women)</option>
+        <option value="1502138">ICC Men's T20 World Cup</option>
+        <option value="1483859">ICC Women's T20 World Cup</option>
+        <option value="1496488">India tour of England 2026</option>
+        <option value="1488246">Australia Women tour of India 2025/26</option>
+)opts",
+        R"btns(      <button onclick="saveCricket()">Load series / save match</button>
+)btns",
+        "Uses ESPN directly, with no key. Browse lists the selected series' matches on ESPN's current scoreboard without changing the device feed; save a match to show it, or leave Match on Automatic.");
 
-    <div class="card">
-      <h2>Live Football (ESPN)</h2>
-      <div class="row"><span>Displayed match:</span> <span class="value" id="fbMatch">-</span></div>
-      <div class="row"><span>Feed status:</span> <span class="value" id="fbFeedStatus">-</span></div>
-      <label>League</label>
-      <select id="fbLeague" onchange="document.getElementById('fbEvent').value=''; document.getElementById('fbLeagueCustom').value=''">
+    html += espnCardHtml(
+        "Live Football (ESPN)", "fb", "football", "League",
+        "Custom ESPN league slug (optional)", "text", "e.g. aus.1 or eng.2",
+        R"opts(
         <option value="eng.1">English Premier League</option>
         <option value="esp.1">Spanish LALIGA</option>
         <option value="ger.1">German Bundesliga</option>
@@ -573,23 +745,24 @@ String ScorePlugin::uiSection() const {
         <option value="usa.1">Major League Soccer</option>
         <option value="uefa.champions">UEFA Champions League</option>
         <option value="uefa.europa">UEFA Europa League</option>
+        <option value="uefa.europa.conf">UEFA Conference League</option>
+        <option value="eng.fa">English FA Cup</option>
+        <option value="eng.league_cup">English Carabao Cup</option>
+        <option value="ger.dfb_pokal">German DFB-Pokal</option>
+        <option value="ita.coppa_italia">Italian Coppa Italia</option>
+        <option value="esp.copa_del_rey">Spanish Copa del Rey</option>
         <option value="fifa.world">FIFA World Cup</option>
-      </select>
-      <label>Custom ESPN league slug (optional)</label>
-      <input type="text" id="fbLeagueCustom" placeholder="e.g. eng.fa or fifa.worldq.uefa">
-      <label>Match</label>
-      <select id="fbEvent"><option value="">Automatic: live, then next match</option></select>
-      <label>Match date (optional, for finished scores)</label>
-      <input type="date" id="fbDate" onchange="document.getElementById('fbEvent').value=''">
-      <label>Refresh interval (seconds)</label>
-      <input type="number" id="fbInterval" min="30" max="3600" placeholder="30">
-      <div style="display:flex; gap:10px;">
+        <option value="fifa.worldq.uefa">FIFA World Cup Qualifying (UEFA)</option>
+        <option value="conmebol.libertadores">CONMEBOL Libertadores</option>
+)opts",
+        R"btns(      <div class="btn-inline">
         <button onclick="saveFootball()">Load league / save match</button>
         <button onclick="refreshFootball()">Refresh now</button>
       </div>
-      <p style="color:#888; font-size:0.85em; margin-bottom:0;">No ESPN key is needed. Load a league first; the Match list shows matches on ESPN's current scoreboard. Leave Match on Automatic to use a live match, then the next scheduled one.</p>
-    </div>
-  <script>
+)btns",
+        "No ESPN key is needed. Browse lists the selected league's matches on ESPN's current scoreboard without changing the device feed; save a match to show it. Leave Match on Automatic to use a live match, then the next scheduled one.");
+
+    html += R"rawliteral(  <script>
     function updateScoresStatus(data) {
       var s = data.plugins && data.plugins.scores;
       if (!s) return;
@@ -616,6 +789,59 @@ String ScorePlugin::uiSection() const {
     function clearScores() {
       if (confirm('Clear the scoreboard?')) postData('/api/plugin/scores/clear', '');
     }
+    // True once a Browse is started, until the user saves a match or changes
+    // the series/league — so the status poller does not overwrite the browse
+    // result with the saved feed's match list.
+    var cricBrowsing = false, fbBrowsing = false;
+    function browseMatches(sport) {
+      var leagueSel, leagueCustom, dateEl, btnId, evId;
+      if (sport === 'cricket') {
+        leagueSel = 'cricLeague'; leagueCustom = 'cricLeagueCustom'; dateEl = 'cricDate'; btnId = 'cricBrowseBtn'; evId = 'cricEvent';
+      } else {
+        leagueSel = 'fbLeague'; leagueCustom = 'fbLeagueCustom'; dateEl = 'fbDate'; btnId = 'fbBrowseBtn'; evId = 'fbEvent';
+      }
+      var custom = document.getElementById(leagueCustom).value.trim();
+      var league = custom || document.getElementById(leagueSel).value;
+      if (!league) { alert('Choose a series or league first'); return; }
+      var date = document.getElementById(dateEl).value || '';
+      var body = 'sport=' + encodeURIComponent(sport) +
+        '&league=' + encodeURIComponent(league) +
+        '&date=' + encodeURIComponent(date);
+      var ev = document.getElementById(evId);
+      if (sport === 'cricket') cricBrowsing = true; else fbBrowsing = true;
+      ev.options.length = 0;
+      ev.add(new Option('Loading\u2026', ''));
+      var btn = document.getElementById(btnId);
+      if (btn) { btn.disabled = true; btn.dataset.label = btn.innerText; btn.innerText = 'Loading\u2026'; }
+      fetch('/api/plugin/scores/browse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body
+      }).then(function(r) { return r.json(); }).then(function(res) {
+        fillEventSelect(evId, res && res.ok ? (res.events || []) : null,
+          res && res.error ? res.error : 'Browse failed');
+      }).catch(function() {
+        fillEventSelect(evId, null, 'Browse failed');
+      }).finally(function() {
+        if (btn) { btn.disabled = false; btn.innerText = btn.dataset.label; }
+      });
+    }
+    function fillEventSelect(evId, events, errorText) {
+      var ev = document.getElementById(evId);
+      ev.options.length = 0;
+      ev.add(new Option('Automatic: live, then next match', ''));
+      if (!events) {
+        ev.add(new Option(errorText || 'Browse failed', ''));
+        return;
+      }
+      if (!events.length) {
+        ev.add(new Option('No matches on ESPN\u2019s current scoreboard', ''));
+        return;
+      }
+      events.forEach(function(item) {
+        ev.add(new Option(item.label, item.id));
+      });
+    }
     function updateCricket(data) {
       var s = data.plugins && data.plugins.scores; if (!s) return;
       document.getElementById('cricMatch').innerText = s.cricketMatch || (s.cricketFetched ? '-' : 'No data yet');
@@ -623,14 +849,17 @@ String ScorePlugin::uiSection() const {
       var league = document.getElementById('cricLeague');
       if (document.activeElement !== league && s.cricketLeague) {
         var found = Array.prototype.some.call(league.options, function(o){return o.value == s.cricketLeague;});
-        if (!found) league.add(new Option(s.cricketLeague + ' (custom)', s.cricketLeague));
+        if (!found) {
+          var seriesLabel = s.cricketLeagueName ? (s.cricketLeagueName + ' (' + s.cricketLeague + ')') : (s.cricketLeague + ' (custom)');
+          league.add(new Option(seriesLabel, s.cricketLeague));
+        }
         league.value = s.cricketLeague;
       }
       var date = document.getElementById('cricDate');
       if (document.activeElement !== date) { var d=s.cricketDate||''; date.value=d.length===8?d.slice(0,4)+'-'+d.slice(4,6)+'-'+d.slice(6,8):''; }
       var interval = document.getElementById('cricInterval'); if (document.activeElement !== interval && s.cricketInterval) interval.value=s.cricketInterval;
       var event = document.getElementById('cricEvent');
-      if (document.activeElement !== event && s.cricketEvents) {
+      if (document.activeElement !== event && !cricBrowsing && s.cricketEvents) {
         var previous=s.cricketEvent||''; event.options.length=0; event.add(new Option('Automatic: live, then next match',''));
         s.cricketEvents.forEach(function(item){event.add(new Option(item.label,item.id));}); event.value=previous;
       }
@@ -641,6 +870,7 @@ String ScorePlugin::uiSection() const {
         '&event='+encodeURIComponent(document.getElementById('cricEvent').value)+
         '&date='+encodeURIComponent(document.getElementById('cricDate').value)+
         '&interval='+encodeURIComponent(document.getElementById('cricInterval').value);
+      cricBrowsing = false; // saved feed becomes authoritative again
       postData('/api/plugin/scores/cricket',body);
     }
     function updateFootball(data) {
@@ -653,7 +883,10 @@ String ScorePlugin::uiSection() const {
       var lg = document.getElementById('fbLeague');
       if (document.activeElement !== lg && s.footballLeague) {
         var known = Array.prototype.some.call(lg.options, function(o){ return o.value === s.footballLeague; });
-        if (!known) lg.add(new Option(s.footballLeague + ' (custom slug)', s.footballLeague));
+        if (!known) {
+          var leagueLabel = s.footballLeagueName ? (s.footballLeagueName + ' (' + s.footballLeague + ')') : (s.footballLeague + ' (custom slug)');
+          lg.add(new Option(leagueLabel, s.footballLeague));
+        }
         lg.value = s.footballLeague;
       }
       var iv = document.getElementById('fbInterval');
@@ -664,7 +897,7 @@ String ScorePlugin::uiSection() const {
         dt.value = compactDate.length === 8 ? compactDate.slice(0,4) + '-' + compactDate.slice(4,6) + '-' + compactDate.slice(6,8) : '';
       }
       var ev = document.getElementById('fbEvent');
-      if (document.activeElement !== ev && s.footballEvents) {
+      if (document.activeElement !== ev && !fbBrowsing && s.footballEvents) {
         var previous = s.footballEvent || '';
         ev.options.length = 0;
         ev.add(new Option('Automatic: live, then next match', ''));
@@ -678,6 +911,7 @@ String ScorePlugin::uiSection() const {
         '&event=' + encodeURIComponent(document.getElementById('fbEvent').value) +
         '&date=' + encodeURIComponent(document.getElementById('fbDate').value) +
         '&interval=' + encodeURIComponent(document.getElementById('fbInterval').value);
+      fbBrowsing = false; // saved feed becomes authoritative again
       postData('/api/plugin/scores/football', body);
     }
     function refreshFootball() {
@@ -688,4 +922,5 @@ String ScorePlugin::uiSection() const {
     registerStatusUpdater(updateFootball);
   </script>
     )rawliteral";
+    return html;
 }

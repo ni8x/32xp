@@ -10,8 +10,10 @@ class PluginManager {
 public:
     static constexpr uint8_t MAX_PLUGINS = 8;
 
-    // Registration order is fixed at boot; do not call after begin().
-    // Duplicates of id or mode are rejected (they make dispatch ambiguous).
+    // Registration order is fixed at boot. The table closes when beginAll()
+    // runs: a plugin registered after that would never receive begin() and
+    // could still be dispatched half-initialised, so such a call is rejected.
+    // Duplicates of id or mode are rejected too (they make dispatch ambiguous).
     void registerPlugin(Plugin* plugin);
 
     Plugin* findByMode(uint8_t mode) const;
@@ -37,4 +39,5 @@ private:
     Plugin* _plugins[MAX_PLUGINS] = {nullptr};
     uint8_t _count = 0;
     Plugin* _active = nullptr;
+    bool _begun = false;   // set by beginAll(); closes the registration table
 };

@@ -5,7 +5,6 @@
 #include "WiFiManager.h"
 #include "WebServer.h"
 #include "TimeManager.h"
-#include "WeatherManager.h"
 #include "MediaManager.h"
 #include "LyricsManager.h"
 #include "plugins/PluginManager.h"
@@ -38,7 +37,6 @@ private:
     MediaManager _mediaManager;
     WebServer _webServer;
     TimeManager _timeManager;
-    WeatherManager _weatherManager;
     LyricsManager _lyricsManager;
 
     // Plugin system: one plugin per screen mode, registered in init().
@@ -53,6 +51,7 @@ private:
     uint8_t _lastDisplayMode;
     uint8_t _lastRotation;
     String _lastTheme;
+    uint32_t _lastThemeCheckMs;
     uint32_t _lastClockUpdate;
     // Clock partial-redraw cache: while the date/custom text are unchanged only
     // the time band is repainted each second, so the screen never flashes black.
@@ -61,6 +60,18 @@ private:
     String _lastClockCustom;
     uint8_t _lastClockTimeSize;
     int16_t _lastClockTimeY;
+    // Clock-face cache: the active style, the last partial-redraw time box used
+    // by the pixel/anime/minimal faces, and the analogue hand angles so the old
+    // hands can be erased before the new ones are drawn.
+    String _lastClockStyle;
+    int16_t _lastTimeX;
+    int16_t _lastTimeY;
+    int16_t _lastTimeW;
+    int16_t _lastTimeH;
+    float _lastHourAng;
+    float _lastMinAng;
+    float _lastSecAng;
+    bool _handsValid;
     uint16_t _lastHeartColor; // heart redraws when the user changes it via web
     uint8_t _lastBrightness;
 
