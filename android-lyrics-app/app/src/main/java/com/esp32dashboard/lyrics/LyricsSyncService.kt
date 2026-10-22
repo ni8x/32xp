@@ -19,14 +19,26 @@ class LyricsSyncService : Service() {
         const val CHANNEL_ID = "lyrics_sync"
         const val ACTION_START = "com.esp32dashboard.lyrics.START"
         const val ACTION_STOP = "com.esp32dashboard.lyrics.STOP"
+        const val ACTION_SET_ROMANIZE = "com.esp32dashboard.lyrics.SET_ROMANIZE"
         const val EXTRA_ESP32_IP = "esp32_ip"
         const val EXTRA_THEME = "theme"
+        const val EXTRA_ROMANIZE = "romanize"
+
+        // Shared with MainActivity: which address the running service posts to,
+        // so the UI can retarget it instead of silently keeping a stale one.
+        const val PREFS = "config"
+        const val KEY_RUNNING = "sync_running"
+        const val KEY_RUNNING_IP = "sync_running_ip"
+        const val KEY_THEME = "theme"
+        const val KEY_ROMANIZE = "romanize_lyrics"
+        private const val HEARTBEAT_MS = 15_000L
     }
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private var engine: LyricsEngine? = null
     private var esp32Client: Esp32Client? = null
     private var currentIp = ""
+    private var heartbeatJob: Job? = null
 
     private val songReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -55,19 +67,79 @@ class LyricsSyncService : Service() {
             ACTION_START -> {
                 val ip = intent.getStringExtra(EXTRA_ESP32_IP) ?: return START_STICKY
                 currentIp = ip
+                markRunning(ip)
                 startForeground(NOTIFICATION_ID, buildNotification("Starting..."))
-                startSync(ip, intent.getStringExtra(EXTRA_THEME) ?: "default")
+                val romanize = intent.getBooleanExtra(
+                    EXTRA_ROMANIZE,
+                    getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_ROMANIZE, true)
+                )
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                    .putBoolean(KEY_ROMANIZE, romanize).apply()
+                startSync(ip, intent.getStringExtra(EXTRA_THEME) ?: "default", romanize)
+            }
+            ACTION_SET_ROMANIZE -> {
+                val enabled = intent.getBooleanExtra(EXTRA_ROMANIZE, true)
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                    .putBoolean(KEY_ROMANIZE, enabled).apply()
+                engine?.setRomanizeEnabled(enabled)
             }
             ACTION_STOP -> {
-                stopSync()
+                markStopped()
+                stopSync(clearDevice = true)
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
+            }
+            else -> {
+                // START_STICKY restart (process killed, phone rebooted) arrives
+                // with a null intent and used to be ignored: the foreground
+                // service came back with no engine and lyrics never resumed,
+                // silently. Resume the saved session instead.
+                val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+                if (!prefs.getBoolean(KEY_RUNNING, false)) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                val ip = prefs.getString(KEY_RUNNING_IP, null).orEmpty()
+                if (ip.isBlank()) {
+                    markStopped()
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                currentIp = ip
+                startForeground(NOTIFICATION_ID, buildNotification("Resuming..."))
+                startSync(
+                    ip,
+                    prefs.getString(KEY_THEME, "default") ?: "default",
+                    prefs.getBoolean(KEY_ROMANIZE, true)
+                )
             }
         }
         return START_STICKY
     }
 
-    private fun startSync(ip: String, theme: String) {
+    private fun markRunning(ip: String) {
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            .putBoolean(KEY_RUNNING, true)
+            .putString(KEY_RUNNING_IP, ip)
+            .apply()
+    }
+
+    private fun markStopped() {
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            .putBoolean(KEY_RUNNING, false)
+            .putString(KEY_RUNNING_IP, "")
+            .apply()
+    }
+
+    private fun startSync(ip: String, theme: String, romanize: Boolean) {
+        // Retargeting (the board's address changed) starts the service again.
+        // The previous engine must stop, or it keeps posting to the old address
+        // alongside the new one and the two fight over the display.
+        engine?.stop()
+        engine = null
+        heartbeatJob?.cancel()
+        heartbeatJob = null
+
         val client = Esp32Client(ip)
         esp32Client = client
 
@@ -96,8 +168,37 @@ class LyricsSyncService : Service() {
                 sendStatusBroadcast("song", "$title|$artist")
             }
         )
+        eng.setRomanizeEnabled(romanize)
         engine = eng
         eng.start(scope)
+
+        // Liveness independent of lyric traffic: a paused song, a track without
+        // synced lyrics, or a wrong address must not leave the ESP32 showing a
+        // stale "Phone Connected" (it drops the phone after PHONE_SILENCE_MS).
+        heartbeatJob = scope.launch {
+            var failures = 0
+            var beats = 0
+            while (isActive) {
+                if (client.ping().isSuccess) {
+                    if (failures >= 3) sendStatusBroadcast("status", "Reconnected to $ip")
+                    failures = 0
+                    // Re-assert the song header: a board reboot wipes it and the
+                    // engine only sends it on a song change, so the panel would
+                    // otherwise show the line with no title until the next track.
+                    if (beats % 4 == 0) {
+                        val title = MusicNotificationListener.currentTitle
+                        val artist = MusicNotificationListener.currentArtist
+                        if (title.isNotBlank()) client.sendNowPlaying(artist, title)
+                    }
+                } else if (++failures == 3) {
+                    val message = "ESP32 not responding at $ip - check the IP"
+                    updateNotification(message)
+                    sendStatusBroadcast("status", message)
+                }
+                beats++
+                delay(HEARTBEAT_MS)
+            }
+        }
 
         // The notification listener can detect the current song before this
         // service is started. In that case rescanActive() intentionally ignores
@@ -120,13 +221,15 @@ class LyricsSyncService : Service() {
         }
     }
 
-    private fun stopSync() {
+    private fun stopSync(clearDevice: Boolean = true) {
+        heartbeatJob?.cancel()
+        heartbeatJob = null
         scope.coroutineContext.cancelChildren()
         engine?.stop()
         engine = null
         val client = esp32Client // capture value before nulling
         esp32Client = null
-        if (client != null) {
+        if (clearDevice && client != null) {
             // Use a dedicated scope: when stopSync is called from onDestroy, the
             // service scope is cancelled immediately after, which would kill the
             // clear request before it could be sent.
@@ -141,7 +244,10 @@ class LyricsSyncService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        stopSync()
+        // Do not blank the panel here: the system may be restarting us
+        // (START_STICKY), in which case a clear would flash the idle screen
+        // before the saved session resumes.
+        stopSync(clearDevice = false)
         unregisterReceiver(songReceiver)
         scope.cancel()
         super.onDestroy()

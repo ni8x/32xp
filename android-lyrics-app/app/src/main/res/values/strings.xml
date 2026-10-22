@@ -1,4 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">ESP32 Lyrics</string>
+    <string name="romanize_title">Lyrics Language</string>
+    <string name="romanize_label">Romanize Hindi / Punjabi</string>
+    <string name="romanize_hint">Hindi and Punjabi lyrics are converted to readable Hinglish before they reach the display. Turn this off only if the panel is set up to render native scripts; the default bitmap font may not show them correctly.</string>
+    <string name="lyrics_settings_title">Lyrics Settings</string>
+    <string name="lyrics_settings_status">Panel Status</string>
+    <string name="lyrics_settings_now_playing">Now Playing</string>
+    <string name="lyrics_color_label">Lyrics Color</string>
+    <string name="lyrics_color_hint">#00FFFF</string>
+    <string name="lyrics_size_label">Lyrics Text Size</string>
+    <string name="lyrics_full_label">Full Screen</string>
+    <string name="lyrics_scroll_label">Scroll Animation</string>
+    <string name="lyrics_refresh">Refresh from Panel</string>
+    <string name="lyrics_save">Save to Panel</string>
+    <string name="lyrics_settings_hint">Reads the live panel status and changes the same lyric settings as the ESP32 web page. Color must be a #RRGGBB value.</string>
 </resources>

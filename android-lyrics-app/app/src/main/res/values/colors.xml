@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Beige / brown palette, mirroring the ESP32 web dashboard -->
+    <color name="beige_bg">#ECE0C8</color>
+    <color name="beige_surface">#F8F1E2</color>
+    <color name="beige_raised">#EFE4CF</color>
+    <color name="beige_border">#D8C6A4</color>
+    <color name="brown_accent">#8B5E34</color>
+    <color name="brown_accent2">#B07D3F</color>
+    <color name="brown_dark">#6F4A28</color>
+    <color name="brown_text">#3D2F21</color>
+    <color name="brown_muted">#8A765C</color>
+    <color name="olive">#6D8B4A</color>
+    <color name="ochre">#C08A2E</color>
+    <color name="brick">#A8482F</color>
+</resources>

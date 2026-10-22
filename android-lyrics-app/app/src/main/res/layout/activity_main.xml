@@ -3,124 +3,582 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="20dp"
-    android:gravity="center_horizontal">
+    android:background="@color/beige_bg">
 
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="ESP32 Dashboard Lyrics"
-        android:textSize="20sp"
-        android:textStyle="bold"
-        android:layout_marginBottom="20dp" />
-
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="ESP32 IP Address"
-        android:layout_marginBottom="5dp" />
-
-    <EditText
-        android:id="@+id/ipInput"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:hint="192.168.1.xxx"
-        android:inputType="phone"
-        android:layout_marginBottom="20dp" />
-
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Display Theme"
-        android:layout_marginBottom="5dp" />
-
-    <Spinner
-        android:id="@+id/themeSpinner"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginBottom="20dp" />
-
+    <!-- ══════════ Top bar ══════════ -->
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="56dp"
         android:orientation="horizontal"
-        android:layout_marginBottom="20dp">
+        android:gravity="center_vertical"
+        android:background="@color/beige_surface"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp">
 
-        <Button
-            android:id="@+id/testButton"
+        <View
+            android:id="@+id/statusDot"
+            android:layout_width="10dp"
+            android:layout_height="10dp"
+            android:layout_marginEnd="10dp"
+            android:background="@drawable/dot" />
+
+        <TextView
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="TEST"
-            android:layout_marginEnd="5dp" />
+            android:text="@string/app_name"
+            android:textColor="@color/brown_text"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.02" />
 
-        <Button
-            android:id="@+id/toggleButton"
-            android:layout_width="0dp"
+        <TextView
+            android:id="@+id/topChip"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_weight="2"
-            android:text="START SYNC" />
-
+            android:background="@drawable/bg_chip"
+            android:paddingStart="11dp"
+            android:paddingTop="4dp"
+            android:paddingEnd="11dp"
+            android:paddingBottom="4dp"
+            android:text="OFFLINE"
+            android:textColor="@color/brown_muted"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.06" />
     </LinearLayout>
 
-    <EditText
-        android:id="@+id/testTextInput"
+    <View
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:hint="Test message for ESP32 display"
-        android:inputType="text"
-        android:layout_marginBottom="6dp" />
+        android:layout_height="1dp"
+        android:background="@color/beige_border" />
 
-    <Button
-        android:id="@+id/sendTestTextButton"
+    <!-- ══════════ Content ══════════ -->
+    <ScrollView
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="SEND TEST TEXT TO DISPLAY"
-        android:layout_marginBottom="20dp" />
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true"
+        android:scrollbars="none">
 
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Status:"
-        android:textStyle="bold"
-        android:layout_marginBottom="5dp" />
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp">
 
-    <TextView
-        android:id="@+id/statusText"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Not started"
-        android:textSize="14sp"
-        android:layout_marginBottom="15dp" />
+            <!-- ===== HOME ===== -->
+            <LinearLayout
+                android:id="@+id/sectionHome"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
 
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Now Playing:"
-        android:textStyle="bold"
-        android:layout_marginBottom="5dp" />
+                <LinearLayout style="@style/Card">
 
-    <TextView
-        android:id="@+id/songText"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text=""
-        android:textSize="14sp"
-        android:layout_marginBottom="15dp" />
+                    <TextView style="@style/SectionTitle" android:text="Sync" />
 
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Current Lyric:"
-        android:textStyle="bold"
-        android:layout_marginBottom="5dp" />
+                    <LinearLayout style="@style/Row">
+                        <TextView style="@style/RowLabel" android:text="State" />
+                        <TextView
+                            android:id="@+id/statusText"
+                            style="@style/RowValue"
+                            android:text="Not started" />
+                    </LinearLayout>
 
-    <TextView
-        android:id="@+id/lyricText"
+                    <TextView
+                        android:id="@+id/toggleButton"
+                        style="@style/BtnPrimary"
+                        android:layout_marginTop="14dp"
+                        android:text="Start Sync" />
+                </LinearLayout>
+
+                <LinearLayout style="@style/Card">
+
+                    <TextView style="@style/SectionTitle" android:text="Now Playing" />
+
+                    <TextView
+                        android:id="@+id/songText"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="Nothing playing yet"
+                        android:textColor="@color/brown_text"
+                        android:textSize="16sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/lyricText"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:text=""
+                        android:textColor="@color/brown_accent2"
+                        android:textSize="15sp"
+                        android:textStyle="italic" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- ===== CONNECT ===== -->
+            <LinearLayout
+                android:id="@+id/sectionConnect"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <LinearLayout style="@style/Card">
+
+                    <TextView style="@style/SectionTitle" android:text="ESP32 Connection" />
+
+                    <TextView style="@style/FieldLabel" android:text="IP Address" />
+
+                    <EditText
+                        android:id="@+id/ipInput"
+                        style="@style/Input"
+                        android:hint="192.168.1.xxx"
+                        android:inputType="phone"
+                        android:maxLines="1" />
+
+                    <TextView
+                        android:id="@+id/testButton"
+                        style="@style/BtnSecondary"
+                        android:layout_marginTop="14dp"
+                        android:text="Test Connection" />
+
+                    <TextView
+                        android:id="@+id/connectionResult"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:text=""
+                        android:textColor="@color/brown_muted"
+                        android:textSize="13sp" />
+                </LinearLayout>
+
+                <LinearLayout style="@style/Card">
+
+                    <TextView style="@style/SectionTitle" android:text="Display Theme" />
+
+                    <TextView style="@style/FieldLabel" android:text="Theme" />
+
+                    <Spinner
+                        android:id="@+id/themeSpinner"
+                        style="@style/Spinner" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- ===== DISPLAY ===== -->
+            <LinearLayout
+                android:id="@+id/sectionDisplay"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <LinearLayout style="@style/Card">
+
+                    <TextView style="@style/SectionTitle" android:text="@string/romanize_title" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/romanize_label"
+                            android:textColor="@color/brown_text"
+                            android:textSize="15sp" />
+
+                        <Switch
+                            android:id="@+id/romanizeSwitch"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="@string/romanize_hint"
+                        android:textColor="@color/brown_muted"
+                        android:textSize="13sp" />
+                </LinearLayout>
+
+                <LinearLayout style="@style/Card">
+
+                    <TextView style="@style/SectionTitle" android:text="@string/lyrics_settings_title" />
+
+                    <LinearLayout style="@style/Row">
+                        <TextView style="@style/RowLabel" android:text="@string/lyrics_settings_status" />
+                        <TextView
+                            android:id="@+id/lyricSettingsStatus"
+                            style="@style/RowValue"
+                            android:text="Not loaded" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/lyricSettingsNowPlaying"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="@string/lyrics_settings_now_playing"
+                        android:textColor="@color/brown_text"
+                        android:textSize="14sp" />
+
+                    <TextView
+                        android:id="@+id/refreshLyricSettingsButton"
+                        style="@style/BtnSecondary"
+                        android:layout_marginTop="10dp"
+                        android:text="@string/lyrics_refresh" />
+
+                    <TextView style="@style/FieldLabel" android:text="@string/lyrics_color_label" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <View
+                            android:id="@+id/lyricColorPreview"
+                            android:layout_width="40dp"
+                            android:layout_height="40dp"
+                            android:layout_marginEnd="10dp"
+                            android:background="@drawable/bg_input" />
+
+                        <EditText
+                            android:id="@+id/lyricColorInput"
+                            style="@style/Input"
+                            android:layout_width="0dp"
+                            android:layout_weight="1"
+                            android:hint="@string/lyrics_color_hint"
+                            android:inputType="textCapCharacters"
+                            android:maxLength="7" />
+                    </LinearLayout>
+
+                    <TextView style="@style/FieldLabel" android:text="@string/lyrics_size_label" />
+
+                    <Spinner
+                        android:id="@+id/lyricSizeSpinner"
+                        style="@style/Spinner" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/lyrics_full_label"
+                            android:textColor="@color/brown_text"
+                            android:textSize="15sp" />
+
+                        <Switch
+                            android:id="@+id/lyricFullSwitch"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/lyrics_scroll_label"
+                            android:textColor="@color/brown_text"
+                            android:textSize="15sp" />
+
+                        <Switch
+                            android:id="@+id/lyricScrollSwitch"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/saveLyricSettingsButton"
+                        style="@style/BtnPrimary"
+                        android:layout_marginTop="14dp"
+                        android:text="@string/lyrics_save" />
+
+                    <TextView
+                        android:id="@+id/lyricSettingsResult"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:textColor="@color/brown_muted"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="@string/lyrics_settings_hint"
+                        android:textColor="@color/brown_muted"
+                        android:textSize="13sp" />
+                </LinearLayout>
+
+                <LinearLayout style="@style/Card">
+
+                    <TextView style="@style/SectionTitle" android:text="Device Settings" />
+
+                    <TextView style="@style/FieldLabel" android:text="Theme" />
+                    <Spinner
+                        android:id="@+id/deviceThemeSpinner"
+                        style="@style/Spinner" />
+
+                    <TextView style="@style/FieldLabel" android:text="Orientation" />
+                    <Spinner
+                        android:id="@+id/deviceOrientationSpinner"
+                        style="@style/Spinner" />
+
+                    <TextView style="@style/FieldLabel" android:text="Brightness" />
+                    <SeekBar
+                        android:id="@+id/brightnessSeek"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:max="255"
+                        android:progress="255" />
+                    <TextView
+                        android:id="@+id/brightnessValue"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="255 / 255"
+                        android:textColor="@color/brown_muted"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:id="@+id/applyDeviceSettingsButton"
+                        style="@style/BtnPrimary"
+                        android:layout_marginTop="12dp"
+                        android:text="Apply Device Settings" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:id="@+id/restartButton"
+                            style="@style/BtnSecondary"
+                            android:layout_width="0dp"
+                            android:layout_weight="1"
+                            android:text="Restart" />
+
+                        <TextView
+                            android:id="@+id/factoryResetButton"
+                            style="@style/BtnSecondary"
+                            android:layout_width="0dp"
+                            android:layout_weight="1"
+                            android:layout_marginStart="10dp"
+                            android:text="Factory Reset" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/deviceSettingsResult"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:text=""
+                        android:textColor="@color/brown_muted"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="Uses the same theme, rotation and brightness endpoints as the ESP32 web page. Restart and Factory Reset require confirmation."
+                        android:textColor="@color/brown_muted"
+                        android:textSize="13sp" />
+                </LinearLayout>
+
+                <LinearLayout style="@style/Card">
+
+                    <TextView style="@style/SectionTitle" android:text="Scores" />
+
+                    <TextView style="@style/FieldLabel" android:text="Sport" />
+                    <Spinner
+                        android:id="@+id/scoreSportSpinner"
+                        style="@style/Spinner" />
+
+                    <TextView
+                        android:id="@+id/scoreLiveStatus"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="No score loaded"
+                        android:textColor="@color/brown_text"
+                        android:textSize="14sp" />
+
+                    <TextView style="@style/FieldLabel" android:layout_marginTop="12dp" android:text="Team A / Score" />
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+                        <EditText
+                            android:id="@+id/scoreTeamA"
+                            style="@style/Input"
+                            android:layout_width="0dp"
+                            android:layout_weight="1"
+                            android:hint="Team A"
+                            android:inputType="text" />
+                        <EditText
+                            android:id="@+id/scoreScoreA"
+                            style="@style/Input"
+                            android:layout_width="84dp"
+                            android:layout_marginStart="8dp"
+                            android:hint="0"
+                            android:inputType="text" />
+                    </LinearLayout>
+
+                    <TextView style="@style/FieldLabel" android:text="Team B / Score" />
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+                        <EditText
+                            android:id="@+id/scoreTeamB"
+                            style="@style/Input"
+                            android:layout_width="0dp"
+                            android:layout_weight="1"
+                            android:hint="Team B"
+                            android:inputType="text" />
+                        <EditText
+                            android:id="@+id/scoreScoreB"
+                            style="@style/Input"
+                            android:layout_width="84dp"
+                            android:layout_marginStart="8dp"
+                            android:hint="0"
+                            android:inputType="text" />
+                    </LinearLayout>
+
+                    <TextView style="@style/FieldLabel" android:text="Status line" />
+                    <EditText
+                        android:id="@+id/scoreStatusLine"
+                        style="@style/Input"
+                        android:hint="e.g. India need 24 runs"
+                        android:inputType="text" />
+
+                    <TextView
+                        android:id="@+id/showScoreButton"
+                        style="@style/BtnPrimary"
+                        android:layout_marginTop="12dp"
+                        android:text="Show on Screen" />
+
+                    <TextView
+                        android:id="@+id/clearScoreButton"
+                        style="@style/BtnSecondary"
+                        android:layout_marginTop="10dp"
+                        android:text="Clear Score" />
+
+                    <TextView
+                        android:id="@+id/scoreResult"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:text=""
+                        android:textColor="@color/brown_muted"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="Manual values take priority over the live ESPN feed. Use Clear to return to live scores."
+                        android:textColor="@color/brown_muted"
+                        android:textSize="13sp" />
+                </LinearLayout>
+
+                <LinearLayout style="@style/Card">
+
+                    <TextView style="@style/SectionTitle" android:text="Send Text to Display" />
+
+                    <TextView style="@style/FieldLabel" android:text="Message" />
+
+                    <EditText
+                        android:id="@+id/testTextInput"
+                        style="@style/Input"
+                        android:hint="Test message for ESP32 display"
+                        android:inputType="text" />
+
+                    <TextView
+                        android:id="@+id/sendTestTextButton"
+                        style="@style/BtnPrimary"
+                        android:layout_marginTop="14dp"
+                        android:text="Send to Display" />
+
+                    <TextView
+                        android:id="@+id/sendResult"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:text=""
+                        android:textColor="@color/brown_muted"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:text="Shows the message on the ESP32 lyric screen and confirms the link is alive."
+                        android:textColor="@color/brown_muted"
+                        android:textSize="13sp" />
+                </LinearLayout>
+            </LinearLayout>
+
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- ══════════ Bottom nav ══════════ -->
+    <View
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text=""
-        android:textSize="16sp"
-        android:textStyle="italic" />
+        android:layout_height="1dp"
+        android:background="@color/beige_border" />
+
+    <LinearLayout
+        android:id="@+id/bottomNav"
+        android:layout_width="match_parent"
+        android:layout_height="58dp"
+        android:orientation="horizontal"
+        android:background="@color/beige_surface">
+
+        <LinearLayout android:id="@+id/navHome" style="@style/NavItem">
+            <ImageView
+                style="@style/NavIcon"
+                android:src="@drawable/ic_home"
+                android:contentDescription="@null" />
+            <TextView style="@style/NavLabel" android:text="Home" />
+        </LinearLayout>
+
+        <LinearLayout android:id="@+id/navConnect" style="@style/NavItem">
+            <ImageView
+                style="@style/NavIcon"
+                android:src="@drawable/ic_link"
+                android:contentDescription="@null" />
+            <TextView style="@style/NavLabel" android:text="Connect" />
+        </LinearLayout>
+
+        <LinearLayout android:id="@+id/navDisplay" style="@style/NavItem">
+            <ImageView
+                style="@style/NavIcon"
+                android:src="@drawable/ic_display"
+                android:contentDescription="@null" />
+            <TextView style="@style/NavLabel" android:text="Display" />
+        </LinearLayout>
+    </LinearLayout>
 
 </LinearLayout>

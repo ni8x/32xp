@@ -10,7 +10,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
 
-data class LrcLine(val timeMs: Long, val text: String)
+data class LrcLine(val timeMs: Long, val text: String, val romanized: String)
 
 // LRCLIB requires a descriptive User-Agent header; default agents (e.g. okhttp/x)
 // are rejected with HTTP 520. Without this, every request fails silently.
@@ -42,9 +42,46 @@ class LyricsEngine(
     private var currentArtist = ""
     private var currentTitle = ""
 
+    /** Native-script lines are converted to Hinglish before they leave the app. */
+    @Volatile
+    var romanizeEnabled: Boolean = true
+        private set
+
+    // Bumped when the user flips the switch. The sync loop watches it and
+    // resends the current line immediately instead of waiting for the next
+    // lyric or the 10-second position re-anchor.
+    @Volatile
+    private var romanizeEpoch = 0
+
+    fun setRomanizeEnabled(enabled: Boolean) {
+        if (romanizeEnabled == enabled) return
+        romanizeEnabled = enabled
+        romanizeEpoch++
+    }
+
+    private fun displayText(line: LrcLine): String =
+        if (romanizeEnabled) line.romanized.ifBlank { line.text } else line.text
+
     // Set when a LRCLIB request fails (HTTP code, or -1 for network error).
     // Lets the status message distinguish "request failed" from "not found".
     private var lastFetchHttpError = 0
+
+    // Consecutive failed POSTs to the ESP32. "Syncing" used to be shown even
+    // when every request failed (wrong address, board offline), so the phone
+    // and the device both looked connected while nothing was arriving.
+    private var sendFailures = 0
+
+    private fun noteSendFailed() {
+        if (sendFailures < 3) sendFailures++
+        if (sendFailures == 3) {
+            onStatus("ESP32 not responding at ${esp32Client.address} - check the IP")
+        }
+    }
+
+    private fun noteSendOk(recoveredStatus: String?) {
+        if (sendFailures >= 3 && recoveredStatus != null) onStatus(recoveredStatus)
+        sendFailures = 0
+    }
 
     fun start(scope: CoroutineScope) {
         this.scope = scope
@@ -79,7 +116,7 @@ class LyricsEngine(
     private suspend fun fetchAndSync(artist: String, title: String) {
         try {
             onStatus("Fetching lyrics...")
-            esp32Client.sendNowPlaying(artist, title)
+            if (esp32Client.sendNowPlaying(artist, title).isFailure) noteSendFailed()
 
             val lyrics = fetchLrcLyrics(artist, title)
             if (lyrics.isEmpty()) {
@@ -104,6 +141,7 @@ class LyricsEngine(
             val detectedAt = System.currentTimeMillis()
             var fallbackStart = -1L
             var lastIndex = -1
+            var lastRomanizeEpoch = romanizeEpoch
             var lastPosSync = 0L
             var waitingShown = false
             var waitingSince = 0L
@@ -171,6 +209,17 @@ class LyricsEngine(
                 val progress = if (totalDuration > 0) {
                     (elapsedMs * 100 / totalDuration).toInt().coerceIn(0, 100)
                 } else 0
+                // A line runs until the next one starts (the last until the track
+                // ends). Sent in ms so the panel can report the line's progress
+                // against the song clock instead of guessing.
+                fun lineEndMs(index: Int): Long =
+                    if (index < lyrics.size - 1) lyrics[index + 1].timeMs else totalDuration
+
+                // Toggle changed: resend this line in the newly selected script.
+                if (romanizeEpoch != lastRomanizeEpoch) {
+                    lastRomanizeEpoch = romanizeEpoch
+                    lastIndex = -1
+                }
 
                 if (currentIndex != lastIndex) {
                     lastIndex = currentIndex
@@ -179,28 +228,38 @@ class LyricsEngine(
                     val prevLine = if (currentIndex > 0) lyrics[currentIndex - 1] else null
                     val nextLine = if (currentIndex < lyrics.size - 1) lyrics[currentIndex + 1] else null
 
-                    onLyricLine(currentLine.text)
+                    onLyricLine(displayText(currentLine))
 
-                    esp32Client.sendLine(
-                        current = currentLine.text,
-                        prev = prevLine?.text ?: "",
-                        next = nextLine?.text ?: "",
+                    val sent = esp32Client.sendLine(
+                        current = displayText(currentLine),
+                        prev = prevLine?.let(::displayText) ?: "",
+                        next = nextLine?.let(::displayText) ?: "",
                         progress = progress,
                         posSec = (elapsedMs / 1000).toInt(),
-                        durSec = (totalDuration / 1000).toInt()
+                        durSec = (totalDuration / 1000).toInt(),
+                        posMs = elapsedMs.toInt(),
+                        lineStartMs = currentLine.timeMs.toInt(),
+                        lineEndMs = lineEndMs(currentIndex).toInt()
                     )
+                    if (sent.isFailure) noteSendFailed()
+                    else noteSendOk("Syncing: $title (${lyrics.size} lines)")
                 } else if (now - lastPosSync >= 10_000 && lastIndex >= 0) {
                     // Periodic position re-anchor: the ESP32 ticks its own
                     // elapsed clock between updates, so during pauses or long
                     // held lines this keeps the on-screen timestamp accurate.
                     lastPosSync = now
                     val currentLine = lyrics[lastIndex]
-                    esp32Client.sendLine(
-                        current = currentLine.text,
+                    val sent = esp32Client.sendLine(
+                        current = displayText(currentLine),
                         progress = progress,
                         posSec = (elapsedMs / 1000).toInt(),
-                        durSec = (totalDuration / 1000).toInt()
+                        durSec = (totalDuration / 1000).toInt(),
+                        posMs = elapsedMs.toInt(),
+                        lineStartMs = currentLine.timeMs.toInt(),
+                        lineEndMs = lineEndMs(lastIndex).toInt()
                     )
+                    if (sent.isFailure) noteSendFailed()
+                    else noteSendOk("Syncing: $title (${lyrics.size} lines)")
                 }
 
                 delay(100) // Check every 100ms
@@ -316,7 +375,7 @@ class LyricsEngine(
 
             if (text.isNotEmpty()) {
                 val timeMs = minutes * 60_000 + seconds * 1000 + centiseconds * 10
-                lines.add(LrcLine(timeMs, text))
+                lines.add(LrcLine(timeMs, text, Romanizer.romanize(text)))
             }
         }
 

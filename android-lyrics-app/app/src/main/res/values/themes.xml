@@ -1,8 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.ESPDashboardLyrics" parent="Theme.AppCompat.Light.DarkActionBar">
-        <item name="colorPrimary">#FF2980B9</item>
-        <item name="colorPrimaryDark">#FF1A5276</item>
-        <item name="colorAccent">#FF3498DB</item>
+    <style name="Theme.ESPDashboardLyrics" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="colorPrimary">@color/brown_accent</item>
+        <item name="colorPrimaryDark">@color/brown_dark</item>
+        <item name="colorAccent">@color/brown_accent</item>
+        <item name="colorButtonNormal">@color/beige_raised</item>
+        <item name="android:windowBackground">@color/beige_bg</item>
+        <item name="android:textColorPrimary">@color/brown_text</item>
+        <item name="android:textColorSecondary">@color/brown_muted</item>
+        <item name="android:textColorHint">@color/brown_muted</item>
     </style>
 </resources>
