@@ -533,7 +533,7 @@ String WebServer::buildStatusJson() {
     doc["heap"] = ESP.getFreeHeap();
     doc["brightness"] = _settings.getBrightness();
     doc["ssid"] = _settings.getWifiSSID();
-    doc["wifiStatus"] = _wifiManager.isConnected() ? "Connected" : "Disconnected";
+    doc["wifiStatus"] = _wifiManager.getStatusString();
     // The driver's own word, next to the answer above: when a station is up on an
     // address but the driver's flag never latched, this is what makes the
     // difference visible instead of looking like a plain disconnect.

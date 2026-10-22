@@ -50,13 +50,6 @@ void App::init() {
     _lastRotation = _settings.getRotation();
     _lastBrightness = _settings.getBrightness();
 
-    // Default credentials are only written on first boot (no saved SSID yet),
-    // so credentials saved later via the web UI are never overwritten.
-    if (_settings.getWifiSSID().isEmpty()) {
-        _settings.setWifiSSID("YOUR_WIFI_SSID");
-        _settings.setWifiPassword("YOUR_WIFI_PASSWORD");
-    }
-
     // One plugin per screen mode; registration order is also the order of the
     // dashboard's mode dropdown.
     _pluginManager.registerPlugin(&_clockPlugin);

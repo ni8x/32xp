@@ -308,8 +308,18 @@ check('a live association is required before the address is believed',
       'RSSI() reads the AP actually associated with; 0 means none')
 check('an address means a non-zero local IP',
       'WiFi.localIP() != IPAddress(0, 0, 0, 0)' in brace_body(wifi, 'bool WiFiManager::hasAddress'))
+ip_body = brace_body(wifi, 'String WiFiManager::ipAddress')
 check('the address is published whenever the interface owns one',
-      'if (!hasAddress()) return "0.0.0.0";' in brace_body(wifi, 'String WiFiManager::ipAddress'))
+      'if (WiFi.localIP() != IPAddress(0, 0, 0, 0)) {' in ip_body and
+      'return WiFi.localIP().toString();' in ip_body and
+      'if (_apMode) return WiFi.softAPIP().toString();' in ip_body)
+check('first boot without credentials starts a setup hotspot',
+      'if (_settings.getWifiSSID().isEmpty()) {' in wifi and
+      'startSetupAp();' in wifi and
+      'WiFi.softAP(SETUP_AP_SSID, SETUP_AP_PASS);' in wifi)
+check('the setup hotspot survives while the station joins home Wi-Fi',
+      'if (_apMode) {' in brace_body(wifi, 'void WiFiManager::connect') and
+      'WiFi.mode(WIFI_AP_STA);' in wifi)
 check('the human status says Connected for an addressed station',
       'if (isConnected()) return "Connected";' in brace_body(wifi, 'String WiFiManager::getStatusString'))
 check('the driver\'s own word stays available for diagnosis',
@@ -340,8 +350,9 @@ link_cases = [
 ]
 bad = [(c, why) for c, ip, rssi, want, why in link_cases if usable_link(c, ip, rssi) != want]
 check('connectivity table (pinned mirror): %d cases' % len(link_cases), not bad, str(bad))
-check('the stale flag is not reported as a disconnect to the page',
-      'doc["wifiStatus"] = _wifiManager.isConnected() ? "Connected" : "Disconnected";' in web)
+check('the page reports the human status, including the setup hotspot',
+      'doc["wifiStatus"] = _wifiManager.getStatusString();' in web and
+      'if (_apMode) return "Setup Hotspot";' in wifi)
 check('the status payload carries the driver state and signal',
       'doc["wifiState"] = _wifiManager.getRawStatusString();' in web and
       'doc["rssi"] = _wifiManager.getRssi();' in web,

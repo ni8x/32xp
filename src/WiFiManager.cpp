@@ -3,9 +3,14 @@
 
 static const char* TAG = "WiFi";
 
+// Temporary access point used only until the owner saves real Wi-Fi details.
+// It is closed again on the next boot once credentials exist.
+static const char* SETUP_AP_SSID = "32XP-Setup";
+static const char* SETUP_AP_PASS = "32xpsetup";
+
 WiFiManager::WiFiManager(Settings& settings) 
     : _settings(settings), _lastConnectAttempt(0), _wasConnected(false),
-      _lastFlagWarnAt(0), _lastAddress(IPAddress(0, 0, 0, 0)),
+      _apMode(false), _lastFlagWarnAt(0), _lastAddress(IPAddress(0, 0, 0, 0)),
       _pinConsidered(false), _pinOffNetwork(false), _staticApplied(false) {
 }
 
@@ -15,11 +20,30 @@ WiFiManager::~WiFiManager() {
 
 void WiFiManager::begin() {
     LOG_INFO(TAG, "Initializing WiFiManager...");
+    if (_settings.getWifiSSID().isEmpty()) {
+        startSetupAp();
+        return;
+    }
+
     WiFi.mode(WIFI_STA);
     WiFi.disconnect(true);
     delay(100);
     
     connect();
+}
+
+void WiFiManager::startSetupAp() {
+    if (_apMode) return;
+
+    _apMode = true;
+    WiFi.mode(WIFI_AP);
+    delay(100);
+    WiFi.softAP(SETUP_AP_SSID, SETUP_AP_PASS);
+
+    LOG_INFO(TAG, (String("No Wi-Fi saved. Setup hotspot started: ") +
+                   SETUP_AP_SSID + " / " + SETUP_AP_PASS).c_str());
+    LOG_INFO(TAG, (String("Open http://") + WiFi.softAPIP().toString() +
+                   " to enter Wi-Fi details").c_str());
 }
 
 void WiFiManager::update() {
@@ -76,8 +100,15 @@ void WiFiManager::connect() {
     String password = _settings.getWifiPassword();
 
     if (ssid.isEmpty()) {
-        LOG_WARN(TAG, "No Wi-Fi credentials saved. Cannot connect.");
+        LOG_WARN(TAG, "No Wi-Fi credentials saved. Keeping setup hotspot.");
+        startSetupAp();
         return;
+    }
+
+    // Keep the setup page reachable while the station joins the home network;
+    // without this the user loses the page before reading the new IP.
+    if (_apMode) {
+        WiFi.mode(WIFI_AP_STA);
     }
 
     LOG_INFO(TAG, "Attempting to connect to Wi-Fi...");
@@ -262,6 +293,10 @@ String WiFiManager::networkDns() {
 }
 
 void WiFiManager::disconnect() {
+    if (_apMode) {
+        WiFi.softAPdisconnect(true);
+        _apMode = false;
+    }
     WiFi.disconnect(true);
     _wasConnected = false;
     LOG_INFO(TAG, "Wi-Fi disconnected manually");
@@ -283,15 +318,25 @@ bool WiFiManager::isConnected() const {
 }
 
 bool WiFiManager::hasAddress() const {
-    return WiFi.localIP() != IPAddress(0, 0, 0, 0);
+    if (WiFi.localIP() != IPAddress(0, 0, 0, 0)) return true;
+    // The setup hotspot is a reachable address too. Treating it as "no address"
+    // would make update() retry station connects that cannot succeed yet.
+    return _apMode;
 }
 
 String WiFiManager::ipAddress() const {
     // Report the address whenever the interface has one, even while the driver's
     // flag is still catching up: 0.0.0.0 here made the dashboard hide the URL of
     // a device the user was looking at.
-    if (!hasAddress()) return "0.0.0.0";
-    return WiFi.localIP().toString();
+    if (WiFi.localIP() != IPAddress(0, 0, 0, 0)) {
+        return WiFi.localIP().toString();
+    }
+    if (_apMode) return WiFi.softAPIP().toString();
+    return "0.0.0.0";
+}
+
+bool WiFiManager::isSetupAp() const {
+    return _apMode;
 }
 
 int WiFiManager::getRssi() const {
@@ -308,6 +353,7 @@ void WiFiManager::logAddress(const char* why) {
 String WiFiManager::getStatusString() const {
     // What a human should read: the link is up if the station has an address.
     if (isConnected()) return "Connected";
+    if (_apMode) return "Setup Hotspot";
     return getRawStatusString();
 }
 

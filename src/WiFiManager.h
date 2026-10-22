@@ -22,6 +22,8 @@ public:
     bool isConnected() const;
     bool hasAddress() const;
     String ipAddress() const;
+    // True while the fallback setup hotspot is running (no saved Wi-Fi yet).
+    bool isSetupAp() const;
     // "Connected" when the station is usable, else the driver's state word.
     String getStatusString() const;
     // The driver's state word, even when it disagrees with isConnected().
@@ -45,6 +47,9 @@ public:
     String staticIpState() const;
 
 private:
+    // Starts the open setup hotspot used on a board with no saved Wi-Fi.
+    void startSetupAp();
+
     // Logs the address the dashboard is reachable at and remembers it. The IP is
     // otherwise invisible in the serial log (it is only drawn on the panel), and
     // a DHCP lease can change it on any boot.
@@ -68,6 +73,8 @@ private:
     Settings& _settings;
     uint32_t _lastConnectAttempt;
     bool _wasConnected;
+    // True while the fallback setup hotspot is active (no saved Wi-Fi yet).
+    bool _apMode;
     // Rate limit for the "address but the driver says otherwise" log line: the
     // condition persists for a whole boot, so it must not spam the serial log.
     uint32_t _lastFlagWarnAt;
