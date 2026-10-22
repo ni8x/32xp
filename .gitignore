@@ -19,6 +19,13 @@ android-lyrics-app/local.properties
 *.apk
 *.aab
 
+# Local logs and secrets
+_boot.txt
+*.log
+.env
+*.jks
+*.keystore
+
 # OS
 Thumbs.db
 .DS_Store
