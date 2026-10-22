@@ -66,4 +66,6 @@ Settings are stored in NVS on the device. The web page and Android app both read
 
 ## License
 
-No license has been declared for this repository. All rights reserved unless a license is added.
+This project is licensed under the **GNU General Public License v3.0**. See [LICENSE](LICENSE) for the full text.
+
+You may use, study, share, and modify the code. If you distribute a modified version, it must remain open source under the GPLv3. Commercial use is permitted, but proprietary closed-source distribution is not.
