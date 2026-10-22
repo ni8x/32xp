@@ -17,7 +17,7 @@ No cloud account is required. The panel runs on your own Wi-Fi.
 
 ## What you need
 
-- An ESP32-S3 development board. The supplied build targets the `esp32-s3-devkitc-1` with 16 MB flash.
+- An ESP32-S3 development board with 16 MB flash. A common `esp32-s3-devkitc-1` board works.
 - A 240x320 ST7789 SPI display.
 - A USB-C **data** cable. Charge-only cables will not work.
 - A 2.4 GHz Wi-Fi network. The ESP32-S3 does not support 5 GHz Wi-Fi.
@@ -130,33 +130,6 @@ The Android app can do the same remotely, plus start and stop lyric sync.
 - Check the display wiring and power.
 - Make sure the board matches the `esp32-s3-devkitc-1` PlatformIO environment.
 - Reflash the firmware.
-
-## Build and test
-
-For development only. Normal users can skip this section.
-
-```powershell
-# Firmware
-pio run
-pio run -t upload
-
-# Static checks
-python tools/check_plugins.py
-python tools/check_net.py
-
-# Android app
-cd android-lyrics-app
-.\gradlew.bat test assembleDebug
-```
-
-## Project layout
-
-```text
-src/                  ESP32-S3 firmware
-android-lyrics-app/   Android companion app
-tools/                Static check scripts
-platformio.ini        PlatformIO board and library configuration
-```
 
 ## Security
 
