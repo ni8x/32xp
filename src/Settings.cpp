@@ -28,16 +28,17 @@ Settings::Settings()
     : _brightness(Config::DEFAULT_BRIGHTNESS),
       _wifiSSID(),
       _wifiPassword(),
+      _staticIp(),
+      _netGateway(),
+      _netSubnet(),
+      _netDns(),
       _clockText(),
       _clockStyle(DEFAULT_CLOCK_STYLE),
       _theme("default"),
       _heartColor(DEFAULT_HEART_COLOR),
       _heartColorSet(false),
       _lyricColor(DEFAULT_LYRIC_COLOR),
-      _lyricGlow(false),
-      _lyricRainbow(false),
-      _lyricFull(false),
-      _lyricGradient(false),
+      _lyricFull(true),
       _lyricScroll(true),
       _lyricFullSize(DEFAULT_LYRIC_FULL_SIZE),
       _scoreSport("cricket"),
@@ -73,6 +74,10 @@ void Settings::init() {
     _brightness = _preferences.getUInt("brightness", Config::DEFAULT_BRIGHTNESS);
     _wifiSSID = _preferences.getString("ssid", "");
     _wifiPassword = _preferences.getString("password", "");
+    _staticIp = _preferences.getString("staticIp", "");
+    _netGateway = _preferences.getString("netGw", "");
+    _netSubnet = _preferences.getString("netMask", "");
+    _netDns = _preferences.getString("netDns", "");
     _clockText = _preferences.getString("clockText", "");
     _clockStyle = _preferences.getString("clockStyle", DEFAULT_CLOCK_STYLE);
     // Clamp to a known theme; an unknown stored value falls back to default
@@ -88,13 +93,12 @@ void Settings::init() {
         _heartColorSet = true;
     }
     _lyricColor = _preferences.getString("lyricColor", DEFAULT_LYRIC_COLOR);
-    _lyricGlow = _preferences.getBool("lyricGlow", false);
-    _lyricRainbow = _preferences.getBool("lyricRainbow", false);
-    _lyricFull = _preferences.getBool("lyricFull", false);
-    _lyricGradient = _preferences.getBool("lyricGradient", false);
-    // Defaults on: the transition is what makes a line advance readable at a
-    // glance, and existing devices (no stored key) should get it.
-    _lyricScroll = _preferences.getBool("lyricScroll", true);
+    // New key so devices that stored the old lyricFull=false get the new
+    // full-screen default.
+    _lyricFull = _preferences.getBool("lyricFullScreen", true);
+    // New key so devices that stored the old lyricScroll=false get the new
+    // scroll-animation default instead of staying static.
+    _lyricScroll = _preferences.getBool("lyricScrollAnim", true);
     _lyricFullSize = _preferences.getUChar("lyricFullSize", DEFAULT_LYRIC_FULL_SIZE);
     if (_lyricFullSize < 1) _lyricFullSize = 1;
     if (_lyricFullSize > LYRIC_FULL_SIZE_MAX) _lyricFullSize = LYRIC_FULL_SIZE_MAX;
@@ -151,6 +155,55 @@ void Settings::setWifiPassword(const String& password) {
     _wifiPassword = password;
     if (_initialized) {
         _preferences.putString("password", _wifiPassword);
+    }
+}
+
+String Settings::getStaticIp() {
+    return _staticIp;
+}
+
+void Settings::setStaticIp(const String& ip) {
+    _staticIp = ip;
+    if (_initialized) {
+        _preferences.putString("staticIp", _staticIp);
+    }
+}
+
+String Settings::getNetGateway() {
+    return _netGateway;
+}
+
+void Settings::setNetGateway(const String& gateway) {
+    // Written by WiFiManager from the live lease; skipping an unchanged value
+    // keeps NVS writes (and flash wear) down to real network changes.
+    if (_netGateway == gateway) return;
+    _netGateway = gateway;
+    if (_initialized) {
+        _preferences.putString("netGw", _netGateway);
+    }
+}
+
+String Settings::getNetSubnet() {
+    return _netSubnet;
+}
+
+void Settings::setNetSubnet(const String& subnet) {
+    if (_netSubnet == subnet) return;
+    _netSubnet = subnet;
+    if (_initialized) {
+        _preferences.putString("netMask", _netSubnet);
+    }
+}
+
+String Settings::getNetDns() {
+    return _netDns;
+}
+
+void Settings::setNetDns(const String& dns) {
+    if (_netDns == dns) return;
+    _netDns = dns;
+    if (_initialized) {
+        _preferences.putString("netDns", _netDns);
     }
 }
 
@@ -270,28 +323,6 @@ void Settings::setLyricColor(const String& hex) {
     }
 }
 
-bool Settings::getLyricGlow() {
-    return _lyricGlow;
-}
-
-void Settings::setLyricGlow(bool enabled) {
-    _lyricGlow = enabled;
-    if (_initialized) {
-        _preferences.putBool("lyricGlow", _lyricGlow);
-    }
-}
-
-bool Settings::getLyricRainbow() {
-    return _lyricRainbow;
-}
-
-void Settings::setLyricRainbow(bool enabled) {
-    _lyricRainbow = enabled;
-    if (_initialized) {
-        _preferences.putBool("lyricRainbow", _lyricRainbow);
-    }
-}
-
 bool Settings::getLyricFull() {
     return _lyricFull;
 }
@@ -299,18 +330,7 @@ bool Settings::getLyricFull() {
 void Settings::setLyricFull(bool enabled) {
     _lyricFull = enabled;
     if (_initialized) {
-        _preferences.putBool("lyricFull", _lyricFull);
-    }
-}
-
-bool Settings::getLyricGradient() {
-    return _lyricGradient;
-}
-
-void Settings::setLyricGradient(bool enabled) {
-    _lyricGradient = enabled;
-    if (_initialized) {
-        _preferences.putBool("lyricGradient", _lyricGradient);
+        _preferences.putBool("lyricFullScreen", _lyricFull);
     }
 }
 
@@ -321,7 +341,7 @@ bool Settings::getLyricScroll() {
 void Settings::setLyricScroll(bool enabled) {
     _lyricScroll = enabled;
     if (_initialized) {
-        _preferences.putBool("lyricScroll", _lyricScroll);
+        _preferences.putBool("lyricScrollAnim", _lyricScroll);
     }
 }
 
@@ -405,6 +425,10 @@ void Settings::clearAll() {
         _preferences.clear();
         _wifiSSID = "";
         _wifiPassword = "";
+        _staticIp = "";
+        _netGateway = "";
+        _netSubnet = "";
+        _netDns = "";
         _brightness = Config::DEFAULT_BRIGHTNESS;
         _clockText = "";
         _clockStyle = DEFAULT_CLOCK_STYLE;
@@ -412,10 +436,7 @@ void Settings::clearAll() {
         _heartColor = DEFAULT_HEART_COLOR;
         _heartColorSet = false;
         _lyricColor = DEFAULT_LYRIC_COLOR;
-        _lyricGlow = false;
-        _lyricRainbow = false;
-        _lyricFull = false;
-        _lyricGradient = false;
+        _lyricFull = true;
         _lyricScroll = true;
         _lyricFullSize = DEFAULT_LYRIC_FULL_SIZE;
         _scoreSport = "cricket";

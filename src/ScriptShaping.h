@@ -44,4 +44,11 @@ bool containsShapedScript(const char* text);
 // [PRE*][MAIN][SHARE*][AFTER*][UPPER*]. Returns the number written to `out`.
 size_t shape(const char* text, PlacedGlyph* out, size_t maxOut);
 
+// True when a line break may fall immediately BEFORE this codepoint, i.e. the
+// codepoint starts a new syllable (consonant or independent vowel), so no matra,
+// nukta or virama is torn away from its base. Only shaped scripts report true;
+// word wrap handles the other scripts. Used when a word is too wide for one row
+// and has to be split between codepoints.
+bool isBreakSafe(uint32_t codepoint);
+
 } // namespace ScriptShaping

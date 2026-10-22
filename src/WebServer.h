@@ -15,6 +15,10 @@ public:
     ~WebServer();
 
     void begin();
+    // Performs a restart asked for by a route once its reply has had time to
+    // leave the socket. Restarting inside the handler ate the response: the
+    // browser saw a failed request for a change that had in fact been saved.
+    void update();
 
 private:
     Settings& _settings;
@@ -23,7 +27,10 @@ private:
     PluginManager* _pluginManager;
 
     AsyncWebServer _server;
+    // Non-zero once a route has asked for a restart (millis() deadline).
+    uint32_t _restartAt = 0;
 
+    void scheduleRestart();
     void setupRoutes();
     String buildStatusJson();
     String buildIndexHtml();

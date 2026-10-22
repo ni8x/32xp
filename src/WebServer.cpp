@@ -8,6 +8,7 @@
 #include <LittleFS.h>
 #include <ArduinoJson.h>
 #include <AsyncJson.h>
+#include <memory>
 
 static const char* TAG = "WebServer";
 
@@ -46,6 +47,13 @@ const char index_html[] PROGMEM = R"rawliteral(
       <span class="chip" id="chipHeap">–</span>
       <span class="chip" id="chipFw">–</span>
     </div>
+  </div>
+
+  <!-- Shown when a status poll fails: the fields below are the last values the
+       device sent, not a live reading. Without this a frozen page could show a
+       stale "Disconnected" for a board that is up. -->
+  <div class="conn-warn" id="connWarn" style="display:none">
+    No answer from the device — the values below are the last ones it sent.
   </div>
 
   <div class="layout">
@@ -222,7 +230,18 @@ const char index_html[] PROGMEM = R"rawliteral(
         <div class="card">
           <h2>Wi-Fi</h2>
           <div class="row"><span>Status</span><span class="value" id="wifiStatus2">–</span></div>
+          <div class="row"><span>Driver state</span><span class="value" id="wifiState2">–</span></div>
           <div class="row"><span>IP address</span><span class="value" id="ip2">–</span></div>
+          <div class="row"><span>Gateway</span><span class="value" id="gw2">–</span></div>
+          <div class="row"><span>Subnet</span><span class="value" id="subnet2">–</span></div>
+          <div class="row"><span>Fixed IP in use</span><span class="value" id="staticState2">–</span></div>
+          <label>Fixed IP address</label>
+          <input type="text" id="staticIp" placeholder="Empty = DHCP (automatic)">
+          <div class="btn-row">
+            <button class="btn btn-primary btn-sm" onclick="saveStaticIp()">Save &amp; restart</button>
+            <button class="btn btn-secondary btn-sm" onclick="clearStaticIp()">Use DHCP</button>
+          </div>
+          <p class="hint">Empty means DHCP, which is what most networks want. A pinned address keeps the dashboard URL the same after every reboot, but it is only applied when it belongs to the network the device actually joins - the board always takes a lease first, so a pin from another network is skipped rather than leaving the dashboard unreachable.</p>
           <label>SSID</label>
           <input type="text" id="ssid" placeholder="Network name">
           <label>Password</label>
@@ -288,6 +307,25 @@ const char index_html[] PROGMEM = R"rawliteral(
       }).then(function(){ updateData(); });
     }
 
+    // Pinning the dashboard's own address. The device validates it, then
+    // restarts; the page keeps the value in the field so it is not lost while
+    // the board is away.
+    function saveStaticIp() {
+      var ip = document.getElementById('staticIp').value.trim();
+      if (ip && !/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) {
+        alert('Enter an IPv4 address like 192.168.1.50, or leave it empty for DHCP.');
+        return;
+      }
+      if (!confirm(ip ? 'Pin the dashboard to ' + ip + '? The device restarts to apply it.'
+                      : 'Use DHCP again? The device restarts and its address may change.')) return;
+      postData('/api/staticip', 'ip=' + encodeURIComponent(ip));
+    }
+
+    function clearStaticIp() {
+      document.getElementById('staticIp').value = '';
+      saveStaticIp();
+    }
+
     function fmtUptime(s) {
       if (s < 60) return s + 's';
       if (s < 3600) return Math.floor(s/60) + 'm ' + (s%60) + 's';
@@ -331,8 +369,21 @@ const char index_html[] PROGMEM = R"rawliteral(
     }
 
     // ── Status polling ─────────────────────────────────────────
+    // A failed poll must be visible: freezing the fields kept a stale reading
+    // (e.g. "Disconnected" from a moment when the link was down) on screen and
+    // indistinguishable from a live one.
+    function setLinkWarning(show) {
+      var warn = document.getElementById('connWarn');
+      if (warn) warn.style.display = show ? 'block' : 'none';
+      if (show) {
+        var dot = document.getElementById('wifiDot');
+        if (dot) dot.className = 'topbar-dot stale';
+      }
+    }
+
     function updateData() {
       fetch('/api/status').then(function(r){ return r.json(); }).then(function(data) {
+        setLinkWarning(false);
         document.getElementById('firmware').innerText = data.firmware || '–';
         var ut = fmtUptime(data.uptime || 0);
         document.getElementById('uptime').innerText = ut;
@@ -345,8 +396,16 @@ const char index_html[] PROGMEM = R"rawliteral(
         var connected = data.wifiStatus === 'Connected';
         document.getElementById('wifiStatus').innerText = data.wifiStatus || '–';
         document.getElementById('wifiStatus2').innerText = data.wifiStatus || '–';
+        document.getElementById('wifiState2').innerText = data.wifiState || '–';
         document.getElementById('ip').innerText = data.ip || '–';
         document.getElementById('ip2').innerText = data.ip || '–';
+        document.getElementById('gw2').innerText = data.gateway || '–';
+        document.getElementById('subnet2').innerText = data.subnet || '–';
+        var pinStates = { active: 'Yes', 'off-network': 'No - not on this network', dhcp: 'No - DHCP' };
+        document.getElementById('staticState2').innerText = pinStates[data.staticIpState] || '–';
+        if (document.activeElement !== document.getElementById('staticIp') && data.staticIp !== undefined) {
+          document.getElementById('staticIp').value = data.staticIp;
+        }
         var dot = document.getElementById('wifiDot');
         dot.className = 'topbar-dot ' + (connected ? 'online' : 'offline');
 
@@ -386,6 +445,10 @@ const char index_html[] PROGMEM = R"rawliteral(
         for (var i = 0; i < statusUpdaters.length; i++) {
           try { statusUpdaters[i](data); } catch(e) { console.error(e); }
         }
+      // Second argument, not .catch(): a rendering error in the block above is a
+      // page bug, and must not be dressed up as "no answer from the device".
+      }, function() {
+        setLinkWarning(true);
       });
       // NOTE: the media list is NOT re-fetched here. It only changes when a
       // file is uploaded or deleted, and polling it re-listed LittleFS and
@@ -471,16 +534,26 @@ String WebServer::buildStatusJson() {
     doc["brightness"] = _settings.getBrightness();
     doc["ssid"] = _settings.getWifiSSID();
     doc["wifiStatus"] = _wifiManager.isConnected() ? "Connected" : "Disconnected";
+    // The driver's own word, next to the answer above: when a station is up on an
+    // address but the driver's flag never latched, this is what makes the
+    // difference visible instead of looking like a plain disconnect.
+    doc["wifiState"] = _wifiManager.getRawStatusString();
+    doc["rssi"] = _wifiManager.getRssi();
     doc["ip"] = _wifiManager.ipAddress();
+    // Addressing: the pinned address (empty = DHCP) plus the gateway/subnet a
+    // fixed address is built from, so the page can show what will be used.
+    doc["staticIp"] = _wifiManager.configuredStaticIp();
+    // Whether the stored pin is actually in force here: "active", "off-network"
+    // (stored from another network, deliberately skipped) or "dhcp".
+    doc["staticIpState"] = _wifiManager.staticIpState();
+    doc["gateway"] = _wifiManager.networkGateway();
+    doc["subnet"] = _wifiManager.networkSubnet();
     doc["clockText"] = _settings.getClockText();
     doc["clockStyle"] = _settings.getClockStyle();
     doc["theme"] = _settings.getTheme();
     doc["heartColor"] = _settings.getHeartColor();
     doc["lyricColor"] = _settings.getLyricColor();
-    doc["lyricGlow"] = _settings.getLyricGlow();
-    doc["lyricRainbow"] = _settings.getLyricRainbow();
     doc["lyricFull"] = _settings.getLyricFull();
-    doc["lyricGradient"] = _settings.getLyricGradient();
     doc["lyricScroll"] = _settings.getLyricScroll();
     doc["lyricFullSize"] = _settings.getLyricFullSize();
     doc["displayMode"] = _settings.getDisplayMode();
@@ -596,6 +669,22 @@ String WebServer::buildIndexHtml() {
     return html;
 }
 
+// A route has answered and wants the board restarted. The reply is queued, not
+// necessarily on the wire yet, so the restart is deferred to update() - the loop
+// keeps running long enough for it to be flushed.
+void WebServer::scheduleRestart() {
+    _restartAt = millis() + 800;
+}
+
+void WebServer::update() {
+    if (_restartAt != 0 && (int32_t)(millis() - _restartAt) >= 0) {
+        _restartAt = 0;
+        LOG_INFO(TAG, "Restarting");
+        delay(50);      // let the log line reach the serial port
+        ESP.restart();
+    }
+}
+
 void WebServer::setupRoutes() {
     _server.on("/", HTTP_GET, [this](AsyncWebServerRequest *request){
         String page = buildIndexHtml();
@@ -613,7 +702,21 @@ void WebServer::setupRoutes() {
             request->send(503, "text/html", fallback);
             return;
         }
-        request->send(200, "text/html", page);
+        // Stream the page out of the String we already hold. The one-shot
+        // send() copies it into the response object, which needs a SECOND
+        // contiguous allocation the size of the page (~64 KB); when the heap is
+        // fragmented that copy silently becomes empty and the browser gets
+        // "200 OK, content-length: 0" - a blank dashboard. Chunks copy a few
+        // hundred bytes at a time and the page is freed when the last one goes.
+        auto pageRef = std::make_shared<String>(std::move(page));
+        request->send(request->beginChunkedResponse("text/html",
+            [pageRef](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
+                if (index >= pageRef->length()) return 0;
+                size_t n = pageRef->length() - index;
+                if (n > maxLen) n = maxLen;
+                memcpy(buffer, pageRef->c_str() + index, n);
+                return n;
+            }));
     });
 
     _server.on("/api/status", HTTP_GET, [this](AsyncWebServerRequest *request){
@@ -786,17 +889,34 @@ void WebServer::setupRoutes() {
         request->send(200, "text/plain", "OK");
     });
 
-    _server.on("/api/restart", HTTP_POST, [](AsyncWebServerRequest *request){
+    // Fixed IP for the dashboard URL. The address is validated against the
+    // network the device is on (gateway/subnet come from its DHCP lease) and then
+    // the board restarts, so the change is applied from a clean netif state. A
+    // value that somehow cannot connect falls back to DHCP on that boot.
+    _server.on("/api/staticip", HTTP_POST, [this](AsyncWebServerRequest *request){
+        if (!request->hasParam("ip", true)) {
+            request->send(400, "text/plain", "Missing ip parameter (send an empty value for DHCP)");
+            return;
+        }
+        String error;
+        if (!_wifiManager.setStaticIp(request->getParam("ip", true)->value(), error)) {
+            LOG_WARN(TAG, ("Fixed IP rejected: " + error).c_str());
+            request->send(400, "text/plain", error);
+            return;
+        }
+        request->send(200, "text/plain", "Saved - restarting to apply");
+        scheduleRestart();
+    });
+
+    _server.on("/api/restart", HTTP_POST, [this](AsyncWebServerRequest *request){
         request->send(200, "text/plain", "Restarting");
-        delay(500);
-        ESP.restart();
+        scheduleRestart();
     });
 
     _server.on("/api/reset", HTTP_POST, [this](AsyncWebServerRequest *request){
         _settings.clearAll();
         request->send(200, "text/plain", "Factory Reset");
-        delay(500);
-        ESP.restart();
+        scheduleRestart();
     });
 
     // Plugins register their own literal routes (frozen endpoints etc.) last

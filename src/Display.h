@@ -26,19 +26,33 @@ public:
     void drawPixelHeart(int16_t x, int16_t y, uint16_t color, uint8_t scale = 4);
     void drawCenteredTextAt(int16_t y, const char* text, uint16_t color, uint8_t size = 1);
 
-    // Centered text with optional radiant glow (3-ring dim halo) and/or rainbow
+    // What drawCenteredTextEffect paints. EFFECT_ALL is the normal full render;
+    // the two single-layer values let a caller redraw just one of them.
+    enum EffectLayer : uint8_t {
+        EFFECT_HALO = 0x01,
+        EFFECT_GLYPHS = 0x02,
+        EFFECT_ALL = EFFECT_HALO | EFFECT_GLYPHS
+    };
+
+    // Centered text with optional radiant glow (2-ring dim halo) and/or rainbow
     // hue cycling across glyphs. hueBase (0..255) animates the rainbow. When
     // outX/outW are given, the drawn line's bounding box is returned (the halo
-    // is not included) so callers can erase exactly that region between frames.
+    // is not included).
     // glowDimOffset adds extra dimming to every halo ring (e.g. 1 = 25% instead
     // of 50% on the innermost ring) for busy screens where a strong glow blinds.
     // gradient applies an Instagram-style edge fade: each glyph is brightened
     // toward the centre of the line and dimmed toward its two ends (combinable
     // with rainbow, which supplies the per-glyph hue).
+    //
+    // layer selects what gets painted (see EffectLayer). A glow halo is the
+    // expensive part - GLOW offsets x rings full text passes - but it only
+    // changes when the TEXT does, so an animation that just recolours the same
+    // glyphs asks for EFFECT_GLYPHS and leaves the halo standing underneath.
     void drawCenteredTextEffect(int16_t y, const char* text, uint16_t color, uint8_t size,
                                 bool glow, bool rainbow, uint8_t hueBase,
                                 int16_t* outX = nullptr, int16_t* outW = nullptr,
-                                uint8_t glowDimOffset = 0, bool gradient = false);
+                                uint8_t glowDimOffset = 0, bool gradient = false,
+                                uint8_t layer = EFFECT_ALL);
 
     // HSV hue (0..255) -> RGB565 (rainbow wheel)
     static uint16_t hueToRGB565(uint8_t hue);
@@ -51,6 +65,16 @@ public:
     // UTF-8 aware text measurement & fitting (pixel-based, never splits a codepoint)
     uint16_t measureText(const char* text, uint8_t size = 1);
     String fitText(const String& text, uint8_t size, int16_t maxWidth);
+
+    // Greedy word wrap: splits `text` into at most maxLines rows that each fit
+    // maxWidth at the given size, breaking at spaces and - for a word wider than
+    // the row - between codepoints (never inside a UTF-8 sequence or halfway
+    // through a shaped syllable). Returns the number of rows written to `out`,
+    // which must hold maxLines Strings. If the text still does not fit the row
+    // budget, the last row is ellipsized with fitText(), so a caller can always
+    // draw every row it gets and none of it overflows the panel.
+    uint8_t wrapText(const String& text, uint8_t size, int16_t maxWidth,
+                     String* out, uint8_t maxLines);
 
     // Small pixel font (ASCII, default 7x13 - very readable) for timestamps /
     // status readouts. Switches the renderer font for the call and restores
@@ -73,6 +97,8 @@ public:
     void drawEmoji(int16_t x, int16_t y, uint32_t codepoint, uint8_t size = 1);
     // Same, but centred on (cx, cy) - for icon slots beside a heading.
     void drawEmojiCentered(int16_t cx, int16_t cy, uint32_t codepoint, uint8_t size = 1);
+    // True when the codepoint has a built-in sprite (used by layout code that
+    // needs to reserve an emoji cell).
     bool isEmoji(uint32_t codepoint);
 
     // Live dimensions (follow the current rotation)
@@ -130,9 +156,10 @@ private:
 
     // Shared renderer behind both effect entry points: draws text (shaped or
     // plain) at left edge x with ink width w, applying glow/rainbow/gradient.
+    // layer is the EffectLayer mask described on drawCenteredTextEffect.
     void renderTextEffect(int16_t x, int16_t y, const char* text, uint16_t color, uint8_t size,
                           bool glow, bool rainbow, bool gradient, uint8_t hueBase,
-                          int16_t w, uint8_t glowDimOffset);
+                          int16_t w, uint8_t glowDimOffset, uint8_t layer);
 
     // ~50%^level brightness of an RGB565 color (level 1 = half, 2 = quarter...).
     uint16_t dimColor(uint16_t color, uint8_t level = 1);

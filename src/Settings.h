@@ -19,6 +19,21 @@ public:
     String getWifiPassword();
     void setWifiPassword(const String& password);
 
+    // Fixed IPv4 address for the dashboard, so its URL survives a reboot.
+    // Empty string = DHCP (the default).
+    String getStaticIp();
+    void setStaticIp(const String& ip);
+
+    // Last DHCP lease: gateway, subnet mask and DNS server. A fixed address is
+    // only usable together with the network's own gateway/mask, so the lease is
+    // remembered and reused - the user only types the address they want.
+    String getNetGateway();
+    void setNetGateway(const String& gateway);
+    String getNetSubnet();
+    void setNetSubnet(const String& subnet);
+    String getNetDns();
+    void setNetDns(const String& dns);
+
     String getClockText();
     void setClockText(const String& text);
 
@@ -67,27 +82,19 @@ public:
     String getLyricColor();
     void setLyricColor(const String& hex);
 
-    bool getLyricGlow();
-    void setLyricGlow(bool enabled);
-
-    bool getLyricRainbow();
-    void setLyricRainbow(bool enabled);
-
-    // Full-screen lyrics style: hide prev/next lines and center the current line
+    // Full-screen lyrics style: hide the header and progress bar and give the
+    // scrolling lyric list the whole panel. On by default.
     bool getLyricFull();
     void setLyricFull(bool enabled);
 
-    // Instagram-style edge-fade gradient across the current lyric line.
-    bool getLyricGradient();
-    void setLyricGradient(bool enabled);
-
-    // Scroll-up transition: when the lyric advances, the prev/current/next rows
-    // slide up by one row instead of snapping to the new line.
+    // Scroll transition: when the lyric advances, the whole list glides up to
+    // centre the new active line instead of snapping.
     bool getLyricScroll();
     void setLyricScroll(bool enabled);
 
-    // Preferred font-size cap for full-screen lyrics (1..LYRIC_FULL_SIZE_MAX).
-    // The renderer still steps down automatically when a line is too wide/tall.
+    // Preferred lyric text size (1..LYRIC_FULL_SIZE_MAX). One uniform size is
+    // used for every row; the renderer steps down to 1 only if a very long line
+    // could not otherwise fit vertically.
     uint8_t getLyricFullSize();
     void setLyricFullSize(uint8_t size);
 
@@ -121,8 +128,8 @@ public:
     // Default values
     static constexpr const char* DEFAULT_HEART_COLOR = "#00d2ff";
     static constexpr const char* DEFAULT_LYRIC_COLOR = "#00ffff"; // cyan
-    static constexpr uint8_t DEFAULT_LYRIC_FULL_SIZE = 5;
-    static constexpr uint8_t LYRIC_FULL_SIZE_MAX = 8;
+    static constexpr uint8_t DEFAULT_LYRIC_FULL_SIZE = 2;
+    static constexpr uint8_t LYRIC_FULL_SIZE_MAX = 2;
     static constexpr const char* DEFAULT_CLOCK_STYLE = "digital";
 
     void clearAll();
@@ -132,16 +139,17 @@ private:
     uint8_t _brightness;
     String _wifiSSID;
     String _wifiPassword;
+    String _staticIp;
+    String _netGateway;
+    String _netSubnet;
+    String _netDns;
     String _clockText;
     String _clockStyle;
     String _theme;
     String _heartColor;
     bool _heartColorSet;
     String _lyricColor;
-    bool _lyricGlow;
-    bool _lyricRainbow;
     bool _lyricFull;
-    bool _lyricGradient;
     bool _lyricScroll;
     uint8_t _lyricFullSize;
     String _scoreSport;

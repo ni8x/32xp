@@ -33,14 +33,11 @@ private:
     Settings* _settings;
     LyricsManager* _lyrics;
 
-    // Partial-redraw cache: while nothing changed, nothing is repainted; when
-    // only the rainbow/timestamps animate, just their regions are refreshed.
+    // Partial-redraw cache: while nothing changed, nothing is repainted; the
+    // progress-bar timestamps still tick once per second.
     String _lastLyricLine;
     String _lastLyricColor;
-    bool _lastLyricGlow;
-    bool _lastLyricRainbow;
     bool _lastLyricFull;
-    bool _lastLyricGradient;
     bool _lastLyricScroll;
     uint8_t _lastLyricFullSize;
     uint32_t _lastLyricDraw;
@@ -60,14 +57,15 @@ private:
     bool _lastLyricActive;
     bool _lastPhoneConnected;
     String _lastLyricTitle;
-    String _lastLyricPrev;
-    String _lastLyricNext;
 
-    // Scroll-up transition (see drawScreen): while _scrollActive the row stack is
-    // redrawn by the update() tick as it slides from _scrollFrom px below its
-    // place down to zero. Progress is wall-clock based, so a slow SPI bus costs
-    // frames rather than stretching the transition.
+    // Scroll-up transition (see drawScreen): while _scrollActive only the
+    // current line is redrawn by the update() tick as it slides from _scrollFrom
+    // px below its place down to zero. Progress is wall-clock based, so a slow
+    // SPI bus costs frames rather than stretching the transition.
     bool _scrollActive;
+    // One-shot demo when Scroll Animation is switched on from the dashboard, so
+    // the toggle has an immediately visible effect even between lyric lines.
+    bool _scrollPreview;
     uint32_t _scrollStart;
     int16_t _scrollFrom;
     int16_t _scrollDy;

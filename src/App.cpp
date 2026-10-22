@@ -472,6 +472,7 @@ void App::invalidateClockScreen() {
 
 void App::update() {
     _wifiManager.update();
+    _webServer.update();
     _timeManager.update();
     _mediaManager.processRequests();
 

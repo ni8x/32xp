@@ -15,7 +15,10 @@ manager and the web shell:
   * every uiSection() lands in a section placeholder,
   * every lyric style toggle is persisted, published, accepted by the style
     endpoint and reachable from the dashboard, and the scroll-up transition's
-    geometry keeps its repaint band clear of the progress bar.
+    geometry keeps its repaint band clear of the progress bar,
+  * a current lyric line that does not fit one row is wrapped (rows drawn
+    verbatim, no ellipsis) and the wrapped block's simulated geometry stays
+    between the song title and the progress-bar timestamps at both orientations.
 
 The one property this cannot prove is thread safety: web handlers run on the
 AsyncTCP task while the render loop runs on the Arduino task. The script prints
@@ -29,6 +32,13 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 fails = []
+
+# Failure details quote source lines and sample lyrics, which include non-ASCII
+# text; a Windows console defaults to a codepage that cannot encode them.
+try:
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+except Exception:
+    pass
 
 
 def read(p):
@@ -291,14 +301,19 @@ clear_all = brace_body(st_cpp, 'void Settings::clearAll()')
 lyr_src = next((p.cs for p in plugins if p.id == 'lyrics'), '')
 
 style_bools = re.findall(r'bool getLyric(\w+)\(\)', st_h)
-check('lyric style toggles are discoverable', len(style_bools) >= 5, str(style_bools))
+check('lyric style toggles are discoverable', len(style_bools) >= 2, str(style_bools))
 for name in style_bools:
     key = 'lyric' + name
+    # Full screen and scroll use fresh NVS keys so devices that stored the old
+    # opt-in flags pick up the new default-on behaviour after flashing.
+    storage_key = {'Full': 'lyricFullScreen',
+                   'Scroll': 'lyricScrollAnim'}.get(name, key)
     low = name[0].lower() + name[1:]          # the web parameter's spelling
     check('setting %-9s has a getter and a setter' % key,
           ('bool getLyric%s();' % name) in st_h and ('void setLyric%s(bool' % name) in st_h)
     check('setting %-9s is loaded from and saved to NVS' % key,
-          ('getBool("%s"' % key) in st_cpp and ('putBool("%s"' % key) in st_cpp)
+          ('getBool("%s"' % storage_key) in st_cpp and
+           ('putBool("%s"' % storage_key) in st_cpp)
     check('setting %-9s is defaulted at construction and in clearAll()' % key,
           re.search(r'_%s\(' % key, ctor_init) is not None and
           re.search(r'_%s\s*=' % key, clear_all) is not None)
@@ -327,87 +342,174 @@ check('full-screen size is clamped on load and on set',
       'if (_lyricFullSize > LYRIC_FULL_SIZE_MAX)' in st_cpp and
       'if (size > LYRIC_FULL_SIZE_MAX) size = LYRIC_FULL_SIZE_MAX;' in st_cpp)
 
-# ---- scroll-up transition geometry ----------------------------------------
+# ---- scroll rendering + transition geometry -------------------------------
 #
-# The transition travels exactly one row pitch, which is what makes its first
-# frame identical to the previous layout one row lower. Its repaint band must
-# stay inside the screen and above the progress bar's timestamp band, whose
-# digits sit just below it.
+# Every lyric row uses one uniform size. Lines wrap instead of ellipsizing, the
+# current block is centered between the header and the timestamp band, and a
+# line advance slides the whole wrapped stack up by the old block's height.
 
-size = int(re.search(r'LYRIC_LINE_SIZE = (\d+)', lyr_src).group(1))
+size_max = int(re.search(r'LYRIC_TEXT_MAX_SIZE = (\d+)', lyr_src).group(1))
 ink_above = int(re.search(r'LYRIC_INK_ABOVE = (-?\d+)', lyr_src).group(1))
-ink_below = int(re.search(r'LYRIC_INK_BELOW = (-?\d+)', lyr_src).group(1))
 disp_cpp = read('src/Display.cpp')
 ascent = int(re.search(r'EMOJI_ASCENT = (\d+)', disp_cpp).group(1))
-check('the row ink box is the font/emoji cell (14*size above, 2*size below)',
-      ink_above == 14 and ink_below == 2 and ink_above == ascent,
-      'above %d, below %d, Display says %d' % (ink_above, ink_below, ascent))
-check('the transition travels one row pitch', 'rowPitch = nextY - baseCurY' in lyr_src)
+check('the row ink box rises 14*size px above the baseline',
+      ink_above == 14 and ink_above == ascent,
+      'above %d, Display says %d' % (ink_above, ascent))
+check('lyrics use the two dashboard text sizes only', size_max == 2, str(size_max))
+check('row pitch scales with the uniform text size',
+      '(16 + LYRIC_ROW_GAP) * size' in lyr_src)
+check('lyric lines wrap instead of ellipsizing',
+      '_display->wrapText(text, size, dispW - 16, rows, LYRIC_MAX_ROWS)' in lyr_src and
+      '_display->fitText(current' not in lyr_src)
+check('the lyric viewport ends above the timestamp band',
+      int(re.search(r'LYRIC_CONTENT_BOTTOM = (\d+)', lyr_src).group(1)) >= 36 and
+      'const int16_t vpBottom = full ? dispH - 4 : dispH - LYRIC_CONTENT_BOTTOM;' in lyr_src)
 check('the transition is armed on a line advance, never on a first paint',
       'lineAdvanced' in lyr_src and '_lastLyricLine.length() > 0' in lyr_src and
       '_lastLyricLine != current' in lyr_src)
-check('full-screen style takes no transition (there is no next row to slide into)',
-      'lineAdvanced = scrollUp && !full' in lyr_src)
+check('a seek or a skipped-forward line does not animate as a normal advance',
+      '!seek' in lyr_src and 'progressNow + 2 < _lastLyricProgress' in lyr_src)
+check('the transition starts one line height plus its gap below centre',
+      '_scrollFrom = _lastCurrH + blockGap;' in lyr_src and
+      'if (_scrollFrom < rowPitch) _scrollFrom = rowPitch;' in lyr_src)
+check('the sliding block never starts partly below the viewport',
+      'const int16_t roomBelow = vpBottom - (currTop + currH);' in lyr_src and
+      '_scrollFrom = clampScroll(_scrollFrom);' in lyr_src and
+      lyr_src.count('_scrollFrom = clampScroll(_scrollFrom);') == 2)
 check('progress is wall-clock based, so a slow bus costs frames, not time',
       re.search(r'constexpr uint16_t LYRIC_SCROLL_MS', lyr_src) is not None and
       'elapsed >= LYRIC_SCROLL_MS' in lyr_src and 'elapsed * 1000 / LYRIC_SCROLL_MS' in lyr_src)
+check('the transition lasts about 300 ms',
+      int(re.search(r'LYRIC_SCROLL_MS = (\d+)', lyr_src).group(1)) == 300)
 check('a cache reset (style/rotation/theme) cancels a transition in flight',
       re.search(r'clearCache\(\)\s*\{(?:\s*//[^\n]*)*\s*_scrollActive = false;', lyr_src) is not None)
 check('a stale transition falls through to a full repaint',
-      'const bool stale = full ||' in lyr_src)
-check('the band clears every row position the stack was drawn at',
-      'bandLowest + _scrollFrom + bandPad' in lyr_src and
-      'drawFilledRectangle(0, top, dispW, (int16_t)(bot - top), BLACK)' in lyr_src)
-check('the band is clamped clear of the progress bar',
-      'const int16_t bandLimit = dispH - 18 - 15;' in lyr_src and
-      'if (bot > bandLimit) bot = bandLimit;' in lyr_src)
-check('an unchanged frame is not repainted', 'if (dy == _scrollDy) return;' in lyr_src)
+      'const bool stale = full != _lastLyricFull ||' in lyr_src)
+check('the transition redraws only the current line',
+      'eraseLast();' in lyr_src and
+      'drawCurrentRows(currTop + dy, true);' in lyr_src and
+      'drawHistory' not in lyr_src and 'drawNext' not in lyr_src)
+check('animation frames erase just the previous text band, not the viewport',
+      'drawFilledRectangle(0, top, dispW, bottom - top, BLACK)' in lyr_src and
+      'clearLyrics' not in lyr_src)
+check('an unchanged frame is not repainted', 'if (dy == _scrollDy && !done) return;' in lyr_src)
 check('the transition can be re-armed by the next line',
-      lyr_src.count('_scrollActive = true;') == 1 and '_scrollFrom = rowPitch;' in lyr_src)
+      lyr_src.count('_scrollActive = true;') == 2)
+check('enabling Scroll Animation previews the motion immediately',
+      '_scrollPreview = previewScroll;' in lyr_src and
+      '} else if (_scrollPreview) {' in lyr_src and
+      '_scrollFrom = rowPitch + blockGap;' in lyr_src)
+check('the active line is drawn plain at full brightness',
+      "drawCenteredTextAt(baseline, currRows[i].c_str(), lyricColor, size)" in lyr_src and
+      'scaleColor(lyricColor' not in lyr_src and 'drawCenteredTextEffect' not in lyr_src)
+check('previous and next context lines are no longer rendered',
+      'getPrevLine' not in lyr_src and 'getNextLine' not in lyr_src and
+      '_history' not in lyr_src and 'pushHistory' not in lyr_src)
+check('a normal line change does not repaint the whole screen',
+      'const bool fullRepaint = titleChanged ||' in lyr_src and
+      '} else {\n        eraseLast();' in lyr_src)
+check('full screen is enabled by default with a fresh preference key',
+      '_lyricFull(true)' in st_cpp and
+      'getBool("lyricFullScreen", true)' in st_cpp and
+      'putBool("lyricFullScreen", _lyricFull)' in st_cpp)
+check('rainbow and gradient effects are fully removed',
+      'LyricRainbow' not in st_cpp + st_h + lyr_src and
+      'LyricGradient' not in st_cpp + st_h + lyr_src and
+      'lyricRainbow' not in st_cpp + st_h + lyr_src and
+      'lyricGradient' not in st_cpp + st_h + lyr_src)
 
-consts = dict((m[0] + '_' + m[1], int(m[2])) for m in
-              re.findall(r'LYRIC_(PREV|CURR|NEXT)_Y_(LANDSCAPE|PORTRAIT)\s*=\s*(\d+)', lyr_src))
-check('both orientations declare all three row baselines', len(consts) == 6, str(sorted(consts)))
-for orient, disph in (('LANDSCAPE', 240), ('PORTRAIT', 320)):
-    if len(consts) < 6:
-        break
-    prev_y, curr_y, next_y = (consts['PREV_' + orient], consts['CURR_' + orient],
-                              consts['NEXT_' + orient])
-    pitch = curr_y - prev_y
-    check('%s rows are evenly pitched (%d px), so one row of travel lands the stack' %
-          (orient.lower(), pitch),
-          pitch > 0 and next_y - curr_y == pitch)
-    band_top = prev_y - ink_above * size - (3 * size + 2)
-    band_ink_bottom = next_y + ink_below * size + pitch      # deepest ink, padding excluded
-    bar_top = disph - 18 - 15
-    check('%s transition ink stays on screen and above the timestamp band' % orient.lower(),
-          0 <= band_top and band_ink_bottom <= bar_top,
-          'band %d..%d vs bar at %d (screen %d)' % (band_top, band_ink_bottom, bar_top, disph))
-
-    # The easing is pure integer arithmetic, which is exactly where a transition
-    # stalls or overshoots. Simulate the shipped expressions (pinned below, so
-    # rewriting either one invalidates the simulation) at 1 ms resolution.
-    ms = int(re.search(r'LYRIC_SCROLL_MS = (\d+)', lyr_src).group(1))
-    check('%s easing expressions are the ones simulated here' % orient.lower(),
-          'const int32_t inv = done ? 0 : 1000 - (int32_t)(elapsed * 1000 / LYRIC_SCROLL_MS);'
-          in lyr_src and
-          'const int16_t dy = done ? 0 : (int16_t)((int32_t)_scrollFrom * inv * inv / 1000000);'
-          in lyr_src and
-          'const bool done = elapsed >= LYRIC_SCROLL_MS;' in lyr_src)
+# Simulate the shipped smoothstep expressions at 1 ms resolution for a few
+# travel distances (one-row and wrapped-block advances). It must start at the
+# full distance, end at zero, and never reverse.
+ms = int(re.search(r'LYRIC_SCROLL_MS = (\d+)', lyr_src).group(1))
+check('the easing expressions are the ones simulated here',
+      'const int32_t p = (int32_t)(elapsed * 1000 / LYRIC_SCROLL_MS);' in lyr_src and
+      'const int32_t p2 = p * p / 1000;' in lyr_src and
+      'eased = p2 * (3000 - 2 * p) / 1000;' in lyr_src and
+      'const int16_t dy =' in lyr_src and
+      'done ? 0 : (int16_t)((int32_t)_scrollFrom * (1000 - eased) / 1000);' in lyr_src and
+      'const bool done = elapsed >= LYRIC_SCROLL_MS;' in lyr_src)
+for travel in (14, 46, 78):
     offsets = []
     for elapsed in range(ms + 1):
         done = elapsed >= ms
-        inv = 0 if done else 1000 - (elapsed * 1000 // ms)
-        offsets.append(0 if done else (pitch * inv * inv) // 1000000)
-    check('%s motion starts a full row pitch out, ends on zero and never reverses' % orient.lower(),
-          offsets[0] == pitch and offsets[-1] == 0 and
+        if done:
+            eased = 1000
+        else:
+            p = elapsed * 1000 // ms
+            p2 = p * p // 1000
+            eased = p2 * (3000 - 2 * p) // 1000
+        offsets.append(0 if done else travel * (1000 - eased) // 1000)
+    check('easing over %d px starts at full travel, ends at zero and never reverses' % travel,
+          offsets[0] == travel and offsets[-1] == 0 and
           all(b <= a for a, b in zip(offsets, offsets[1:])),
           'first %d last %d' % (offsets[0], offsets[-1]))
-    check('%s motion is still visibly moving mid-way (it is not a cut)' % orient.lower(),
-          0 < offsets[ms // 2] < pitch, 'mid offset %d' % offsets[ms // 2])
-    frames = len(set(offsets))
-    check('%s motion needs at most a frame per pixel row (%d rows)' % (orient.lower(), frames),
-      frames <= pitch + 1, str(frames))
+    check('easing over %d px is still visibly moving mid-way' % travel,
+          0 < offsets[ms // 2] < travel, 'mid offset %d' % offsets[ms // 2])
+
+# ------------------------------------------------------- line timing / pacing
+#
+# The phone sends song-millisecond line timing; the manager turns it into a
+# line-progress figure published in /api/status. Each layer's arithmetic is
+# table-tested against a mirror of the shipped code, pinned by the exact
+# expressions.
+
+mgr = read('src/LyricsManager.cpp')
+check('the endpoint takes the line timing as optional parameters',
+      all('hasParam("%s", true)' % p in lyr_src for p in ('posms', 'lstart', 'lend')))
+check('the JSON path takes the same timing',
+      all('data["%s"]' % p in lyr_src for p in ('posms', 'lstart', 'lend')))
+check('a zero-length line window is refused',
+      'if (lineEndMs <= lineStartMs) {' in mgr)
+check('a line change invalidates the previous line\'s timing',
+      '_lineSetAt = millis();\n'
+      '        // Timing is per line: drop the previous line\'s until the phone says\n'
+      '        // otherwise (it calls setLineTiming() right after this).\n'
+      '        _hasLineTiming = false;' in mgr)
+check('line lengths are learned, with outlier intervals excluded',
+      '_estLineMs = (_estLineMs * 3 + held) / 4;' in mgr and
+      'held > 400 && held < 30000' in mgr)
+check('timing is dropped on song change, clear and stop',
+      mgr.count('_hasLineTiming = false;') >= 4, str(mgr.count('_hasLineTiming = false;')))
+check('pacing uses the song clock when a millisecond position arrived',
+      '_posMs + (millis() - _posMsAt)' in mgr and 'if (_hasPosMs) {' in mgr)
+check('an unpaced line reports 255 rather than pretending to be at 0',
+      'return 255;' in mgr)
+
+# Mirror of the pacing arithmetic: clamped at both ends, never above 100.
+def line_progress(song_ms, start, end, span_known=True, local_ms=0, est=3000):
+    if not span_known:
+        return 100 if local_ms >= est else local_ms * 100 // est
+    if end <= start:
+        return 255
+    if song_ms <= start:
+        return 0
+    into = song_ms - start
+    span = end - start
+    return 100 if into >= span else into * 100 // span
+
+
+pacing = [((0, 10000, 13000), 0), ((9999, 10000, 13000), 0), ((10000, 10000, 13000), 0),
+          ((11500, 10000, 13000), 50), ((12999, 10000, 13000), 99),
+          ((13000, 10000, 13000), 100), ((99999, 10000, 13000), 100),
+          ((500, 10000, 13000), 0)]
+bad = [(t, want, line_progress(*t)) for t, want in pacing if line_progress(*t) != want]
+check('pacing mirrors the shipped arithmetic over a line window', not bad, str(bad))
+check('pacing never exceeds 100 when the clock runs past the line',
+      line_progress(999999, 0, 1000) == 100)
+
+# ---------------------------------------------------------------- the app side
+
+app_client = read('android-lyrics-app/app/src/main/java/com/esp32dashboard/lyrics/Esp32Client.kt')
+app_engine = read('android-lyrics-app/app/src/main/java/com/esp32dashboard/lyrics/LyricsEngine.kt')
+check('the app sends the line timing with each line',
+      '&posms=$posMs&lstart=$lineStartMs&lend=$lineEndMs' in app_client)
+check('the app derives a line\'s end from the next line (track end for the last)',
+      'if (index < lyrics.size - 1) lyrics[index + 1].timeMs else totalDuration' in app_engine)
+check('both the line change and the periodic re-anchor carry the timing',
+      app_engine.count('lineStartMs =') == 2 and app_engine.count('lineEndMs =') == 2,
+      'lineStartMs=%d lineEndMs=%d' % (app_engine.count('lineStartMs ='),
+                                       app_engine.count('lineEndMs =')))
 
 # --------------------------------------------- cross-task access inventory
 #

@@ -423,7 +423,7 @@ void Display::drawGradientText(int16_t x, int16_t y, const char* text, uint8_t s
 void Display::drawCenteredTextEffect(int16_t y, const char* text, uint16_t color, uint8_t size,
                                      bool glow, bool rainbow, uint8_t hueBase,
                                      int16_t* outX, int16_t* outW, uint8_t glowDimOffset,
-                                     bool gradient) {
+                                     bool gradient, uint8_t layer) {
     if (!_gfx || !text || strlen(text) == 0) {
         if (outX) *outX = 0;
         if (outW) *outW = 0;
@@ -444,12 +444,13 @@ void Display::drawCenteredTextEffect(int16_t y, const char* text, uint16_t color
     if (outX) *outX = x;
     if (outW) *outW = w;
 
-    renderTextEffect(x, y, text, color, size, glow, rainbow, gradient, hueBase, w, glowDimOffset);
+    renderTextEffect(x, y, text, color, size, glow, rainbow, gradient, hueBase, w, glowDimOffset,
+                     layer);
 }
 
 void Display::renderTextEffect(int16_t x, int16_t y, const char* text, uint16_t color, uint8_t size,
                                bool glow, bool rainbow, bool gradient, uint8_t hueBase,
-                               int16_t w, uint8_t glowDimOffset) {
+                               int16_t w, uint8_t glowDimOffset, uint8_t layer) {
     const bool shaped = ScriptShaping::containsShapedScript(text);
 
     // The shaped layout is computed ONCE per call and reused by every halo
@@ -488,7 +489,7 @@ void Display::renderTextEffect(int16_t x, int16_t y, const char* text, uint16_t 
         }
     };
 
-    if (glow) {
+    if (glow && (layer & EFFECT_HALO)) {
         // Radiant halo: three rings at 1..GLOW_RADIUS px (text size 1) using the
         // 8 compass offsets per ring (N/E/S/W + diagonals), with brightness
         // falling off 50% per ring outward. Compass rings keep the glow round
@@ -503,7 +504,9 @@ void Display::renderTextEffect(int16_t x, int16_t y, const char* text, uint16_t 
             }
         }
     }
-    renderPass(0, 0, 0);
+    // EFFECT_GLYPHS lets an animation recolour just the text while the halo from
+    // an earlier EFFECT_HALO/EFFECT_ALL pass stays underneath.
+    if (layer & EFFECT_GLYPHS) renderPass(0, 0, 0);
 }
 
 int16_t Display::codepointAdvance(uint32_t codepoint) {
@@ -755,6 +758,108 @@ String Display::fitText(const String& text, uint8_t size, int16_t maxWidth) {
         return text.substring(0, min(cpLen, text.length()));
     }
     return acc + "..";
+}
+
+uint8_t Display::wrapText(const String& text, uint8_t size, int16_t maxWidth,
+                          String* out, uint8_t maxLines) {
+    if (!out || maxLines == 0 || maxWidth <= 0) return 0;
+    String src = text;
+    src.trim();
+    if (src.isEmpty()) return 0;
+
+    const size_t len = src.length();
+    // Byte length of the codepoint starting at i, clamped to the string.
+    auto cpLenAt = [&src, len](size_t i) -> size_t {
+        const uint8_t b = (uint8_t)src[i];
+        size_t n = (b >= 0xF0) ? 4 : (b >= 0xE0) ? 3 : (b >= 0xC0) ? 2 : 1;
+        return (i + n > len) ? (len - i) : n;
+    };
+    auto cpAt = [&src, &cpLenAt](size_t i) -> uint32_t {
+        const size_t n = cpLenAt(i);
+        const uint8_t b = (uint8_t)src[i];
+        if (n == 1) return b;
+        uint32_t cp = (n == 4) ? (b & 0x07) : (n == 3) ? (b & 0x0F) : (b & 0x1F);
+        for (size_t k = 1; k < n; k++) cp = (cp << 6) | ((uint8_t)src[i + k] & 0x3F);
+        return cp;
+    };
+    // Only shaped (Indic) text has syllables whose boundary a break must
+    // respect; for everything else any codepoint boundary is fine.
+    const bool shaped = ScriptShaping::containsShapedScript(src.c_str());
+
+    uint8_t rows = 0;
+    size_t pos = 0;
+    while (pos < len && rows < maxLines) {
+        while (pos < len && src[pos] == ' ') pos++;
+        if (pos >= len) break;
+
+        String row;
+        row.reserve(48);
+        size_t next = pos;
+
+        // Greedily append whole words while they still fit this row.
+        while (next < len) {
+            const size_t ws = next;
+            size_t we = ws;
+            while (we < len && src[we] != ' ') we++;
+            const String word = src.substring(ws, we);
+            const String trial = row.isEmpty() ? word : row + " " + word;
+            // measureText returns the ink width: exactly what must fit.
+            if ((int16_t)measureText(trial.c_str(), size) > maxWidth) break;
+            row = trial;
+            next = we;
+            while (next < len && src[next] == ' ') next++;
+        }
+
+        if (row.isEmpty()) {
+            // One word is wider than the row: split it between codepoints.
+            const size_t ws = next;   // the failing word starts here
+            size_t we = ws;
+            while (we < len && src[we] != ' ') we++;
+            String bestRow;           // widest split at a syllable boundary
+            size_t best = 0;
+            size_t i = ws;
+            while (i < we) {
+                const size_t cl = cpLenAt(i);
+                const String cand = row + src.substring(i, i + cl);
+                if (!row.isEmpty() && (int16_t)measureText(cand.c_str(), size) > maxWidth) break;
+                row = cand;
+                i += cl;
+                if (i >= we) { best = i; bestRow = row; break; }
+                if (!shaped || ScriptShaping::isBreakSafe(cpAt(i))) {
+                    best = i;
+                    bestRow = row;
+                }
+            }
+            if (best > ws) {
+                row = bestRow;
+                i = best;
+            }
+            if (row.isEmpty()) {
+                // Even a single glyph overflows the row (a huge emoji at a big
+                // font): take it anyway, so the outer loop always advances.
+                const size_t cl = cpLenAt(ws);
+                row = src.substring(ws, ws + cl);
+                i = ws + cl;
+            }
+            next = i;
+            while (next < len && src[next] == ' ') next++;
+        }
+
+        out[rows++] = row;
+        if (next <= pos) break;   // defensive: never spin on a zero-width glyph
+        pos = next;
+    }
+
+    if (pos < len && rows > 0) {
+        // The row budget ran out: mark the cut on the last row instead of
+        // silently dropping the rest of the line.
+        String rest = src.substring(pos);
+        rest.trim();
+        if (!rest.isEmpty()) {
+            out[rows - 1] = fitText(out[rows - 1] + " " + rest, size, maxWidth);
+        }
+    }
+    return rows;
 }
 
 int16_t Display::width() {

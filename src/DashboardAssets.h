@@ -58,6 +58,14 @@ inline constexpr const char DASHBOARD_CSS[] = R"css(
     }
     .topbar-dot.online  { background: var(--success); box-shadow: 0 0 6px var(--success); }
     .topbar-dot.offline { background: var(--danger); }
+    /* Polls are failing: the page is showing what the device last said. */
+    .topbar-dot.stale   { background: var(--warning); }
+    .conn-warn {
+      background: rgba(192,138,46,.18); color: var(--warning);
+      font-size: .75rem; font-weight: 600; letter-spacing: .02em;
+      padding: 8px 16px; text-align: center;
+      border-bottom: 1px solid var(--border);
+    }
     .status-chips { display: flex; gap: 6px; flex-wrap: wrap; }
     .chip {
       font-size: .7rem; font-weight: 500; letter-spacing: .04em;

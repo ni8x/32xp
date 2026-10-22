@@ -160,4 +160,8 @@ size_t shape(const char* text, PlacedGlyph* out, size_t maxOut) {
     return placed;
 }
 
+bool isBreakSafe(uint32_t codepoint) {
+    return isStarter(codepoint);
+}
+
 } // namespace ScriptShaping
